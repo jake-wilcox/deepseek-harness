@@ -44,7 +44,9 @@ pi-ai 的 `Models` 自带一套凭据概念——按提供方 ID 索引的 `Cred
 
 `ModelsImpl.applyAuth` 会把 `options.apiKey` 当作该请求的密钥，但这条路必须经由一个声明了 api-key 方法的提供方：`resolveProviderAuth` 在覆盖存在时短路到该方法，否则依次落到凭据存储与环境发现；若提供方压根没有 api-key 方法，它返回空，请求随即以 `Provider is not configured` 失败。因此 harness 一如既往经自身 seam 解析路由密钥，并把结果作为请求的 `apiKey` 传入；该集合构造时不带任何凭据存储。
 
-路由的 auth 由此推出。catalog 路由保留已安装提供方自己的 `auth`，从而为不点名凭据的 profile 保住其提供方原生环境发现，且在 `api` 覆盖之下同样保留：提供方读哪个环境是提供方自身的属性，而非其模型所讲协议格式（wire format）的属性。例外是没有 api-key 方法的 catalog 提供方——`openai-codex` 只走 OAuth——此时点名了凭据的 profile 会在提供方原有 auth 之外再获得 harness 的方法，否则它配置的密钥会在任何请求发出之前被拒。这类路由上不点名凭据的 profile 什么也不加、并保留那句诚实的拒绝：本适配器没有可供解析的 OAuth 存储。手工声明的路由则获得一个 harness 自有的 `ApiKeyAuth`，它报告「已配置但无密钥」而非「未配置」，把该要求留给协议——那才是它真正所在的位置：pi-ai 的 OpenAI 兼容实现仍要求密钥或 `Authorization` 标头，并且会自己说出来。
+路由的 auth 由此推出。catalog 路由保留已安装提供方自己的 `auth`，从而为不点名凭据的 profile 保住其提供方原生环境发现，且在 `api` 覆盖之下同样保留：提供方读哪个环境是提供方自身的属性，而非其模型所讲协议格式（wire format）的属性。例外是没有 api-key 方法的 catalog 提供方——`openai-codex` 只走 OAuth——此时点名了凭据的 profile 会在提供方原有 auth 之外再获得 harness 的方法，否则它配置的密钥会在任何请求发出之前被拒。在该决策实施之时，这类路由上不点名凭据的 profile 什么也不加，并保留那句诚实的拒绝，因为适配器还没有可供解析的 OAuth 存储。手工声明的路由则获得一个 harness 自有的 `ApiKeyAuth`，它报告「已配置但无密钥」而非「未配置」，把该要求留给协议——那才是它真正所在的位置：pi-ai 的 OpenAI 兼容实现仍要求密钥或 `Authorization` 标头，并且会自己说出来。
+
+后来的 [OpenAI Codex 订阅认证决策](../feature/2026-08-18-openai-codex-subscription-oauth.md)只取代上一段中「没有存储」的陈述：组合了凭据 seam 时，适配器现在会向 pi-ai 提供持久 OAuth 存储，并注册 Codex device-code 流程。本 Note 中由 profile 点名 API 密钥所补充的方法，以及全部提供方构造规则保持不变。
 
 ## Alternatives considered
 

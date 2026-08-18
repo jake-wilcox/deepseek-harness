@@ -16,7 +16,7 @@
 
 选择**添加提供方**，选取 Anthropic 或 OpenAI 等提供方，输入其 API 密钥并保存。已安装目录会提供端点、协议和模型列表。
 
-使用原生认证的提供方需要各自的原生凭据。Bedrock、Vertex、Azure 和 Codex 分别使用 AWS 凭据与区域、ADC 项目、`api-version` 和 OAuth；只填写 API 密钥字段无法完成配置。
+使用原生认证的提供方走各自的设置。对于 **OpenAI Codex**，选择该提供方并点击**使用 ChatGPT 登录**。打开显示的验证页面，输入短代码，等待状态变为**已连接**，再应用该提供方。这会使用由 ChatGPT 订阅支持的 Codex 路由；OAuth 凭据只写，并会自动刷新。Bedrock、Vertex 与 Azure 仍需在该表单之外提供各自的 AWS 凭据与区域、ADC 项目，或提供方环境与 `api-version`。
 
 ## 添加自定义提供方
 
@@ -88,6 +88,7 @@ llm-pi-ai:
 ## 排错
 
 - **`MISSING_CREDENTIAL`**：通过模型页存储提供方密钥，或提供被引用的环境变量。
+- **OpenAI Codex 显示未连接**：启动**使用 ChatGPT 登录**并完成显示的 device code。若之前的尝试卡住，请取消后重新开始。
 - **`UNKNOWN_MODEL`**：选择已配置的模型，或向自定义提供方添加缺失的模型。
 - **获取可用模型返回 401**：检查密钥。模型发现会调用 OpenAI 兼容的 `GET /models` 端点；对于不提供该端点的服务，请手动输入模型。
 - **图片在发送前被拒绝**：该模型未声明图片模态。请给自定义提供方的模型加上 `input: [text, image]`；DeepSeek 自身的 chat-completions 路由是纯文本的，且无法通过配置改变。

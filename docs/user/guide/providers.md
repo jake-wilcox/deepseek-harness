@@ -16,7 +16,7 @@ Keys are write-only. The page receives a redacted descriptor after saving, never
 
 Choose **Add provider**, select a provider such as Anthropic or OpenAI, enter its API key, and save. The installed catalog supplies the endpoint, protocol, and model list.
 
-Providers with native authentication need their native credentials instead. Bedrock, Vertex, Azure, and Codex use AWS credentials and a region, an ADC project, an `api-version`, and OAuth respectively; filling only the API-key field does not configure them.
+Providers with native authentication use their own setup. For **OpenAI Codex**, choose the provider and select **Sign in with ChatGPT**. Open the displayed verification page, enter its short code, wait for **Connected**, then apply the provider. This uses the ChatGPT subscription-backed Codex route; the OAuth credential is write-only and refreshes automatically. Bedrock, Vertex, and Azure still require their AWS credentials and region, ADC project, or provider environment plus `api-version` outside this form.
 
 ## Add a custom provider
 
@@ -88,6 +88,7 @@ If a saved default names a provider that was deleted, the composer displays **Se
 ## Troubleshooting
 
 - **`MISSING_CREDENTIAL`** — Store the provider key through the Models page or supply the referenced environment variable.
+- **OpenAI Codex shows Not connected** — Start **Sign in with ChatGPT** and complete the displayed device code. If a previous attempt is stuck, cancel it and start another.
 - **`UNKNOWN_MODEL`** — Select a configured model or add the missing model to the custom provider.
 - **Fetching available models returns 401** — Check the key. Model discovery calls the OpenAI-compatible `GET /models` endpoint; enter models manually for endpoints that do not provide it.
 - **An image is refused before sending** — The model declares no image modality. Give a custom provider's model `input: [text, image]`; DeepSeek's own chat-completions route is text-only and cannot be configured otherwise.
