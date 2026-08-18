@@ -32,6 +32,7 @@ export async function mockServer(script: {
   body?: string
   delayMs?: number
   headers?: Record<string, string>
+  parseJson?: boolean
 }[]): Promise<MockServer> {
   const paths: string[] = []
   const requests: unknown[] = []
@@ -46,10 +47,10 @@ export async function mockServer(script: {
     let body = ''
     request.on('data', (chunk: Buffer) => { body += chunk.toString('utf8') })
     request.on('end', () => {
-      paths.push(request.url ?? '')
-      requests.push(body.length === 0 ? undefined : JSON.parse(body))
-      headers.push(request.headers)
       const behavior = script.shift() ?? { status: 500, body: 'script exhausted' }
+      paths.push(request.url ?? '')
+      requests.push(body.length === 0 || behavior.parseJson === false ? undefined : JSON.parse(body))
+      headers.push(request.headers)
       if (behavior.status !== undefined && behavior.status !== 200) {
         response.writeHead(behavior.status, { 'content-type': 'application/json', ...behavior.headers })
         response.end(behavior.body ?? '{}')

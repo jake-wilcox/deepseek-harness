@@ -61,10 +61,12 @@ import { assertUsableApiKey, LlmError } from '@deepseek-ai/dsh-llm'
 import type { AdapterRegistrationHandle, DirectoryRegistrationHandle, LlmConfigurableProvider } from '@deepseek-ai/dsh-llm'
 import { deepEqualJson, installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { PiAiAdapter } from './adapter.ts'
-import { catalogProviderIds, catalogProviderTakesApiKey } from './catalog.ts'
+import { catalogProviderIds, catalogProviderTakesApiKey, catalogProviderTakesOAuth } from './catalog.ts'
 import { assertServiceable, Config, resolveProfiles } from './config.ts'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
 import { discoverModels } from './discovery.ts'
+import { openAiCodexAuthentication } from './authentication.ts'
+import { HarnessCredentialStore } from './credentials.ts'
 
 export { PiAiAdapter } from './adapter.ts'
 export type { PiAiAdapterOptions } from './adapter.ts'
@@ -80,6 +82,7 @@ export type {
   ResolvedPiAiProviderProfile,
 } from './config.ts'
 export { supportedProtocols } from './provider.ts'
+export { HarnessCredentialStore, piAiCredentialRef } from './credentials.ts'
 
 export const name = 'llm-pi-ai'
 export const inject = ['llm']
@@ -119,6 +122,7 @@ function registrationFacts(profiles: ReadonlyMap<string, ResolvedPiAiProviderPro
  */
 function directoryEntries(
   profiles: ReadonlyMap<string, ResolvedPiAiProviderProfile>,
+  canPersistOAuth: boolean,
 ): LlmConfigurableProvider[] {
   const catalog = new Set(catalogProviderIds())
   const entries = new Map<string, LlmConfigurableProvider>()
@@ -134,13 +138,11 @@ function directoryEntries(
       declared: !catalog.has(provider),
     })
   }
-  // A provider whose only native method is OAuth leaves this adapter nothing
-  // to authenticate with, so offering it would put a card on the settings page
-  // whose own posture — no key, credentials discovered by the provider — fails
-  // every request. Catalog *membership* is unaffected, so `declare` above still
-  // answers what pi-ai ships.
   for (const provider of catalog) {
-    if (catalogProviderTakesApiKey(provider)) declare(provider, provider)
+    if (catalogProviderTakesApiKey(provider)
+      || (canPersistOAuth && provider === 'openai-codex' && catalogProviderTakesOAuth(provider))) {
+      declare(provider, provider)
+    }
   }
   for (const [provider, profile] of profiles) declare(provider, profile.displayName)
   return [...entries.values()]
@@ -148,6 +150,7 @@ function directoryEntries(
 
 /** Register one generic pi-ai adapter for all configured provider routes. */
 export function apply(ctx: Context, config: Config): void {
+  let credentialStore: HarnessCredentialStore | undefined
   let current: () => Config = () => config
   let lastRaw: Config | undefined
   let memoized: ReadonlyMap<string, ResolvedPiAiProviderProfile> | undefined
@@ -200,6 +203,7 @@ export function apply(ctx: Context, config: Config): void {
   const adapter = new PiAiAdapter({
     profiles,
     resolveApiKey,
+    resolveCredentialStore: () => credentialStore,
     resolveAttachments: () => ctx.get('attachments'),
     onReplayDegrade: ({ provider, model, reason }) => {
       ctx.logger.warn(
@@ -215,7 +219,7 @@ export function apply(ctx: Context, config: Config): void {
   let directory: DirectoryRegistrationHandle | undefined
   let directoryFacts: unknown
   const ensureDirectory = (): void => {
-    const entries = directoryEntries(profiles())
+    const entries = directoryEntries(profiles(), credentialStore !== undefined)
     if (deepEqualJson(entries, directoryFacts)) return
     // Atomic replace, never dispose-then-register: a route another adapter
     // family already declares (a profile keyed `deepseek-official`) would
@@ -230,6 +234,18 @@ export function apply(ctx: Context, config: Config): void {
     directoryFacts = entries
   }
   ensureDirectory()
+  ctx.inject(['credentials'], (credentialCtx) => {
+    const store = new HarnessCredentialStore(credentialCtx.credentials, catalogProviderIds())
+    credentialStore = store
+    ensureDirectory()
+    credentialCtx.llm.registerProviderAuthentication('openai-codex', openAiCodexAuthentication(store))
+    credentialCtx.effect(() => () => {
+      /* v8 ignore next -- a stale optional-service disposer cannot clear a replacement */
+      if (credentialStore !== store) return
+      credentialStore = undefined
+      ensureDirectory()
+    }, 'llmPiAi.credentialStore')
+  })
   /**
    * The credential a named route already resolves, for an interrogation whose
    * draft carries none. A route being declared for the first time names no

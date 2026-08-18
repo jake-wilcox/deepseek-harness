@@ -577,10 +577,9 @@ describe('catalog routes with per-model configuration', () => {
     expect(auth?.auth.apiKey).toBe('codex-token')
   })
 
-  it('leaves an OAuth-only catalog route unconfigured when its profile names no key', () => {
-    // Nothing to add: this adapter resolves credentials through its own seam
-    // and holds no OAuth store, so declaring the provider configured would
-    // trade a truthful refusal for an endpoint's 401.
+  it('does not invent an API-key method when an OAuth-only route names no key', () => {
+    // Runtime OAuth credentials join the Models collection separately; route
+    // materialization must preserve the provider's OAuth-only declaration.
     const resolved = resolveProfiles({ 'openai-codex': {} })
     expect(resolved.get('openai-codex')?.piProvider.auth.apiKey).toBeUndefined()
   })
