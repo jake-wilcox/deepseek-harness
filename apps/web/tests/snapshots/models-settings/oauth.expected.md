@@ -19,11 +19,7 @@
     - text: 关闭
   - heading "模型" [level=2]
   - paragraph: 添加 API 密钥或登录，即可使用以下提供方的模型。
-  - list:
-    - listitem:
-      - text: DeepSeek
-      - img "API 密钥缺失"
-      - button "编辑 DeepSeek (deepseek-official)": 编辑
+  - list
   - text: 提供方
   - combobox "提供方":
     - option "amazon-bedrock"
@@ -42,13 +38,13 @@
     - option "huggingface"
     - option "kimi-coding"
     - option "minimax"
-    - option "minimax-cn" [selected]
+    - option "minimax-cn"
     - option "mistral"
     - option "moonshotai"
     - option "moonshotai-cn"
     - option "nvidia"
     - option "openai"
-    - option "openai-codex"
+    - option "openai-codex" [selected]
     - option "opencode"
     - option "opencode-go"
     - option "openrouter"
@@ -63,9 +59,8 @@
     - option "xiaomi-token-plan-sgp"
     - option "zai"
     - option "zai-coding-cn"
-  - text: API 密钥
-  - textbox "API 密钥":
-    - /placeholder: 输入 API 密钥，或留空使用环境认证
+  - text: 未登录
+  - button "Sign in with ChatGPT"
   - group: 自定义设置
   - button "取消"
-  - button "保存"
+  - button "保存" [disabled]

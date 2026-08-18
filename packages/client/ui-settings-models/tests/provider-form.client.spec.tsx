@@ -1,16 +1,17 @@
 // @vitest-environment jsdom
 /** Model-list editing, endpoint interrogation, and hand-declared provider creation. */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import Schema from '@deepseek-ai/schemastery'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
-import type { RpcResponse, SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
+import type { ProviderAuthenticationView, RpcResponse, SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
 import { ModelsSection, providerCopy } from '../src/client/ModelsSection.tsx'
 import type { ModelsSectionInjected } from '../src/client/ModelsSection.tsx'
 import { CustomProviderCard } from '../src/client/CustomProviderCard.tsx'
 import { formatCapacity, parseCapacity } from '../src/client/DeepSeekModelsEditor.tsx'
 import { ModelsSettingsStore, deriveKeyRef, protocolChoices } from '../src/client/store.ts'
 import { en } from '../src/client/locales.ts'
+import { ProviderAuthentication } from '../src/client/ProviderAuthentication.tsx'
 
 afterEach(cleanup)
 
@@ -71,6 +72,10 @@ function scriptedFace(options: {
   baseProviders?: Record<string, unknown>
   /** Routes the adapter reports as hand-declared; the rest come back as shipped. */
   declaredRoutes?: readonly string[]
+  /** Directory routes, when they differ from the configured profile keys. */
+  directoryProviders?: readonly string[]
+  /** Provider-owned authentication state keyed by route. */
+  authentications?: Readonly<Record<string, ProviderAuthenticationView>>
   discover?: ReturnType<typeof vi.fn>
   mutate?: ReturnType<typeof vi.fn>
   set?: ReturnType<typeof vi.fn>
@@ -85,13 +90,16 @@ function scriptedFace(options: {
   const face = {
     llm: {
       providers: vi.fn(() => Promise.resolve(ok({
-        providers: Object.keys(providers).map(provider => ({
+        providers: (options.directoryProviders ?? Object.keys(providers)).map(provider => ({
           provider,
           displayName: provider,
           settingsNs: 'llm-pi-ai',
           settingsPath: ['providers', provider],
           active: true,
           declared: options.declaredRoutes?.includes(provider) ?? false,
+          ...options.authentications?.[provider] === undefined
+            ? {}
+            : { authentication: options.authentications[provider] },
         })),
       }))),
       models: vi.fn(() => Promise.resolve(ok({ groups: [], failures: [] }))),
@@ -649,6 +657,453 @@ describe('provider rows', () => {
     // Absent is "unknown", never "shipped": an adapter that answers nothing
     // must not have its routes labelled either way.
     expect(screen.queryByText(en.customTag)).toBeNull()
+  })
+})
+
+describe('interactive provider authentication', () => {
+  const authentication = (authenticated = false): ProviderAuthenticationView => ({
+    authenticated,
+    ...authenticated ? { source: 'OAuth' } : {},
+    methods: [{ id: 'chatgpt-device-code', name: 'Sign in with ChatGPT', kind: 'device-code' }],
+  })
+
+  it('carries provider-owned authentication through the row and editor', async () => {
+    await mountSection({
+      providers: { 'openai-codex': {} },
+      authentications: { 'openai-codex': authentication(false) },
+    })
+    expect(screen.getByLabelText(en.credentialMissing)).toBeDefined()
+    openEditor('openai-codex')
+    expect(screen.getByText(en.authNotConnected)).toBeDefined()
+    expect(screen.queryByLabelText(en.keyInput)).toBeNull()
+    expect(buttonNamed(en.apply).disabled).toBe(true)
+  })
+
+  it('marks authenticated routes configured without a separate key', async () => {
+    await mountSection({
+      providers: { 'openai-codex': {} },
+      authentications: { 'openai-codex': authentication(true) },
+    })
+    expect(screen.getByLabelText(en.credentialConfigured)).toBeDefined()
+  })
+
+  it('falls back to generic sign-in copy for an empty method list', () => {
+    render(<ProviderAuthentication
+      provider="openai-codex"
+      authentication={{ authenticated: false, methods: [] }}
+      api={{ llm: {} } as never}
+      t={t}
+      disabled={false}
+      onChange={vi.fn()}
+    />)
+    expect(screen.getByText(en.authSignIn)).toBeDefined()
+  })
+
+  it('passes authentication into the add-existing-provider editor', async () => {
+    await mountSection({
+      providers: {},
+      directoryProviders: ['openai-codex'],
+      authentications: { 'openai-codex': authentication(false) },
+    })
+    fireEvent.click(screen.getByText(en.add))
+    expect(screen.getByText(en.authNotConnected)).toBeDefined()
+    expect(screen.queryByLabelText(en.keyInput)).toBeNull()
+  })
+
+  it('shows a device code, polls to success, and refreshes provider status', async () => {
+    vi.useFakeTimers()
+    try {
+      const onChange = vi.fn()
+      const attempt = {
+        attemptId: 'attempt-1' as never,
+        provider: 'openai-codex',
+        method: 'chatgpt-device-code',
+        state: 'waiting' as const,
+        notification: {
+          kind: 'device-code' as const,
+          verificationUrl: 'https://example.test/device',
+          userCode: 'ABCD-EFGH',
+        },
+      }
+      const llm = {
+        startProviderLogin: vi.fn(() => Promise.resolve(ok({ attempt }))),
+        providerLoginAttempt: vi.fn(() => Promise.resolve(ok({
+          attempt: { ...attempt, state: 'succeeded' as const },
+        }))),
+        cancelProviderLogin: vi.fn(() => Promise.resolve(ok({
+          attempt: { ...attempt, state: 'cancelled' as const },
+        }))),
+        logoutProvider: vi.fn(),
+        providers: vi.fn(() => Promise.resolve(ok({
+          providers: [{
+            provider: 'openai-codex',
+            displayName: 'OpenAI Codex',
+            settingsNs: 'llm-pi-ai',
+            settingsPath: ['providers', 'openai-codex'],
+            active: true,
+            authentication: {
+              authenticated: true,
+              source: 'OAuth',
+              methods: [{ id: 'chatgpt-device-code', name: 'Sign in with ChatGPT', kind: 'device-code' as const }],
+            },
+          }],
+        }))),
+      }
+      render(<ProviderAuthentication
+        provider="openai-codex"
+        authentication={{
+          authenticated: false,
+          methods: [{ id: 'chatgpt-device-code', name: 'Sign in with ChatGPT', kind: 'device-code' }],
+        }}
+        api={{ llm } as never}
+        t={t}
+        disabled={false}
+        onChange={onChange}
+      />)
+
+      fireEvent.click(screen.getByText('Sign in with ChatGPT'))
+      await act(async () => { await Promise.resolve() })
+      expect(screen.getByText('ABCD-EFGH')).toBeDefined()
+      expect(screen.getByRole('link', { name: en.authOpenPage }).getAttribute('href')).toBe('https://example.test/device')
+      await act(async () => { await vi.advanceTimersByTimeAsync(750) })
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ authenticated: true, source: 'OAuth' }))
+      expect(llm.cancelProviderLogin).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('removes a persisted sign-in and refreshes the provider status', async () => {
+    const onChange = vi.fn()
+    const logoutProvider = vi.fn(() => Promise.resolve(ok({})))
+    const authentication = {
+      authenticated: true,
+      source: 'OAuth',
+      methods: [{ id: 'chatgpt-device-code', name: 'Sign in with ChatGPT', kind: 'device-code' as const }],
+    }
+    render(<ProviderAuthentication
+      provider="openai-codex"
+      authentication={authentication}
+      api={{ llm: {
+        logoutProvider,
+        providers: () => Promise.resolve(ok({ providers: [{
+          provider: 'openai-codex',
+          displayName: 'OpenAI Codex',
+          settingsNs: 'llm-pi-ai',
+          settingsPath: ['providers', 'openai-codex'],
+          active: false,
+          authentication: { ...authentication, authenticated: false, source: undefined },
+        }] })),
+      } } as never}
+      t={t}
+      disabled={false}
+      onChange={onChange}
+    />)
+
+    fireEvent.click(screen.getByText(en.authSignOut))
+    await waitFor(() => { expect(logoutProvider).toHaveBeenCalledWith({ provider: 'openai-codex' }) })
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ authenticated: false }))
+  })
+
+  it('shows sign-in failures returned by the host', async () => {
+    const release = Promise.withResolvers<RpcResponse<{ attempt: never }>>()
+    render(<ProviderAuthentication
+      provider="openai-codex"
+      authentication={authentication(false)}
+      api={{ llm: {
+        startProviderLogin: vi.fn(() => release.promise),
+      } } as never}
+      t={t}
+      disabled={false}
+      onChange={vi.fn()}
+    />)
+
+    fireEvent.click(screen.getByText('Sign in with ChatGPT'))
+    expect(screen.getByText(en.authSigningIn)).toBeDefined()
+    release.resolve(fail('Cannot start sign-in', 'START_FAILED'))
+    expect(await screen.findByText('Cannot start sign-in')).toBeDefined()
+  })
+
+  it('renders progress and a provider failure while polling an active attempt', async () => {
+    vi.useFakeTimers()
+    try {
+      const base = {
+        attemptId: 'attempt-progress' as never,
+        provider: 'openai-codex',
+        method: 'chatgpt-device-code',
+      }
+      const providerLoginAttempt = vi.fn()
+        .mockResolvedValueOnce(ok({ attempt: { ...base, state: 'starting' as const } }))
+        .mockResolvedValueOnce(ok({
+          attempt: {
+            ...base,
+            state: 'waiting' as const,
+            notification: { kind: 'progress' as const, message: 'Checking authorization' },
+          },
+        }))
+        .mockResolvedValueOnce(ok({ attempt: { ...base, state: 'failed' as const } }))
+      render(<ProviderAuthentication
+        provider="openai-codex"
+        authentication={authentication(false)}
+        api={{ llm: {
+          startProviderLogin: () => Promise.resolve(ok({ attempt: { ...base, state: 'starting' as const } })),
+          providerLoginAttempt,
+          cancelProviderLogin: () => Promise.resolve(ok({ attempt: { ...base, state: 'cancelled' as const } })),
+        } } as never}
+        t={t}
+        disabled={false}
+        onChange={vi.fn()}
+      />)
+
+      fireEvent.click(screen.getByText('Sign in with ChatGPT'))
+      await act(async () => { await Promise.resolve() })
+      expect(screen.getByText(en.authStarting)).toBeDefined()
+      await act(async () => { await vi.advanceTimersByTimeAsync(750) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(750) })
+      expect(screen.getByText('Checking authorization')).toBeDefined()
+      await act(async () => { await vi.advanceTimersByTimeAsync(750) })
+      expect(screen.getByText(en.authFailed)).toBeDefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shows polling failures and preserves a provider-supplied failure message', async () => {
+    vi.useFakeTimers()
+    try {
+      const base = {
+        attemptId: 'attempt-failure' as never,
+        provider: 'openai-codex',
+        method: 'chatgpt-device-code',
+        state: 'waiting' as const,
+      }
+      const providerLoginAttempt = vi.fn()
+        .mockResolvedValueOnce(fail('Polling unavailable', 'POLL_FAILED'))
+      const { unmount } = render(<ProviderAuthentication
+        provider="openai-codex"
+        authentication={authentication(false)}
+        api={{ llm: {
+          startProviderLogin: () => Promise.resolve(ok({ attempt: base })),
+          providerLoginAttempt,
+          cancelProviderLogin: vi.fn(() => Promise.resolve(ok({ attempt: { ...base, state: 'cancelled' as const } }))),
+        } } as never}
+        t={t}
+        disabled={false}
+        onChange={vi.fn()}
+      />)
+      fireEvent.click(screen.getByText('Sign in with ChatGPT'))
+      await act(async () => { await Promise.resolve() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(750) })
+      expect(screen.getByText('Polling unavailable')).toBeDefined()
+      unmount()
+
+      const second = { ...base, attemptId: 'attempt-provider-failure' as never }
+      render(<ProviderAuthentication
+        provider="openai-codex"
+        authentication={authentication(false)}
+        api={{ llm: {
+          startProviderLogin: () => Promise.resolve(ok({ attempt: second })),
+          providerLoginAttempt: () => Promise.resolve(ok({
+            attempt: { ...second, state: 'failed' as const, error: 'Authorization denied' },
+          })),
+          cancelProviderLogin: vi.fn(),
+        } } as never}
+        t={t}
+        disabled={false}
+        onChange={vi.fn()}
+      />)
+      fireEvent.click(screen.getByText('Sign in with ChatGPT'))
+      await act(async () => { await Promise.resolve() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(750) })
+      expect(screen.getByText('Authorization denied')).toBeDefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops on cancellation and tolerates success after the provider leaves the directory', async () => {
+    vi.useFakeTimers()
+    try {
+      const base = {
+        attemptId: 'attempt-terminal' as never,
+        provider: 'openai-codex',
+        method: 'chatgpt-device-code',
+        state: 'waiting' as const,
+      }
+      const onChange = vi.fn()
+      const { unmount } = render(<ProviderAuthentication
+        provider="openai-codex"
+        authentication={authentication(false)}
+        api={{ llm: {
+          startProviderLogin: () => Promise.resolve(ok({ attempt: base })),
+          providerLoginAttempt: () => Promise.resolve(ok({
+            attempt: { ...base, state: 'succeeded' as const },
+          })),
+          providers: () => Promise.resolve(ok({ providers: [] })),
+          cancelProviderLogin: vi.fn(),
+        } } as never}
+        t={t}
+        disabled={false}
+        onChange={onChange}
+      />)
+      fireEvent.click(screen.getByText('Sign in with ChatGPT'))
+      await act(async () => { await Promise.resolve() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(750) })
+      expect(onChange).not.toHaveBeenCalled()
+      unmount()
+
+      const cancelled = { ...base, attemptId: 'attempt-cancelled' as never }
+      render(<ProviderAuthentication
+        provider="openai-codex"
+        authentication={authentication(false)}
+        api={{ llm: {
+          startProviderLogin: () => Promise.resolve(ok({ attempt: cancelled })),
+          providerLoginAttempt: () => Promise.resolve(ok({
+            attempt: { ...cancelled, state: 'cancelled' as const },
+          })),
+          cancelProviderLogin: vi.fn(),
+        } } as never}
+        t={t}
+        disabled={false}
+        onChange={vi.fn()}
+      />)
+      fireEvent.click(screen.getByText('Sign in with ChatGPT'))
+      await act(async () => { await Promise.resolve() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(750) })
+      expect(screen.queryByText(en.authFailed)).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancels an active attempt and reports cancellation failures', async () => {
+    const base = {
+      attemptId: 'attempt-cancel' as never,
+      provider: 'openai-codex',
+      method: 'chatgpt-device-code',
+      state: 'waiting' as const,
+    }
+    const cancelProviderLogin = vi.fn()
+      .mockResolvedValueOnce(ok({ attempt: { ...base, state: 'cancelled' as const } }))
+      .mockResolvedValueOnce(fail('Cannot cancel sign-in', 'CANCEL_FAILED'))
+    const llm = {
+      startProviderLogin: vi.fn(() => Promise.resolve(ok({ attempt: base }))),
+      providerLoginAttempt: vi.fn(() => new Promise(() => undefined)),
+      cancelProviderLogin,
+    }
+    const { unmount } = render(<ProviderAuthentication
+      provider="openai-codex"
+      authentication={authentication(false)}
+      api={{ llm } as never}
+      t={t}
+      disabled={false}
+      onChange={vi.fn()}
+    />)
+    fireEvent.click(screen.getByText('Sign in with ChatGPT'))
+    await screen.findByText(en.authCancel)
+    fireEvent.click(screen.getByText(en.authCancel))
+    await waitFor(() => { expect(cancelProviderLogin).toHaveBeenCalledTimes(1) })
+    unmount()
+    cancelProviderLogin.mockReset().mockResolvedValueOnce(fail('Cannot cancel sign-in', 'CANCEL_FAILED'))
+
+    render(<ProviderAuthentication
+      provider="openai-codex"
+      authentication={authentication(false)}
+      api={{ llm } as never}
+      t={t}
+      disabled={false}
+      onChange={vi.fn()}
+    />)
+    fireEvent.click(screen.getByText('Sign in with ChatGPT'))
+    await screen.findByText(en.authCancel)
+    fireEvent.click(screen.getByText(en.authCancel))
+    expect(await screen.findByText('Cannot cancel sign-in')).toBeDefined()
+  })
+
+  it('cancels polling when the control unmounts', async () => {
+    vi.useFakeTimers()
+    try {
+      const attempt = {
+        attemptId: 'attempt-unmount' as never,
+        provider: 'openai-codex',
+        method: 'chatgpt-device-code',
+        state: 'waiting' as const,
+      }
+      const cancelProviderLogin = vi.fn(() => Promise.resolve(ok({
+        attempt: { ...attempt, state: 'cancelled' as const },
+      })))
+      const rendered = render(<ProviderAuthentication
+        provider="openai-codex"
+        authentication={authentication(false)}
+        api={{ llm: {
+          startProviderLogin: () => Promise.resolve(ok({ attempt })),
+          providerLoginAttempt: vi.fn(),
+          cancelProviderLogin,
+        } } as never}
+        t={t}
+        disabled={false}
+        onChange={vi.fn()}
+      />)
+      fireEvent.click(screen.getByText('Sign in with ChatGPT'))
+      await act(async () => { await Promise.resolve() })
+      rendered.unmount()
+      await act(async () => { await vi.advanceTimersByTimeAsync(750) })
+      expect(cancelProviderLogin).toHaveBeenCalledWith({
+        provider: 'openai-codex',
+        attemptId: attempt.attemptId,
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reports sign-out and post-sign-out refresh failures', async () => {
+    const auth = authentication(true)
+    const { unmount } = render(<ProviderAuthentication
+      provider="openai-codex"
+      authentication={auth}
+      api={{ llm: {
+        logoutProvider: () => Promise.resolve(fail('Cannot sign out', 'LOGOUT_FAILED')),
+      } } as never}
+      t={t}
+      disabled={false}
+      onChange={vi.fn()}
+    />)
+    fireEvent.click(screen.getByText(en.authSignOut))
+    expect(await screen.findByText('Cannot sign out')).toBeDefined()
+    unmount()
+
+    render(<ProviderAuthentication
+      provider="openai-codex"
+      authentication={auth}
+      api={{ llm: {
+        logoutProvider: () => Promise.resolve(ok({})),
+        providers: () => Promise.resolve(fail('Cannot refresh providers', 'REFRESH_FAILED')),
+      } } as never}
+      t={t}
+      disabled={false}
+      onChange={vi.fn()}
+    />)
+    fireEvent.click(screen.getByText(en.authSignOut))
+    expect(await screen.findByText('Cannot refresh providers')).toBeDefined()
+  })
+
+  it('tolerates a refreshed directory that no longer contains the provider', async () => {
+    const onChange = vi.fn()
+    render(<ProviderAuthentication
+      provider="openai-codex"
+      authentication={authentication(true)}
+      api={{ llm: {
+        logoutProvider: () => Promise.resolve(ok({})),
+        providers: () => Promise.resolve(ok({ providers: [] })),
+      } } as never}
+      t={t}
+      disabled={false}
+      onChange={onChange}
+    />)
+    fireEvent.click(screen.getByText(en.authSignOut))
+    await waitFor(() => { expect(screen.getByText(en.authSignOut)).toBeDefined() })
+    expect(onChange).not.toHaveBeenCalled()
   })
 })
 

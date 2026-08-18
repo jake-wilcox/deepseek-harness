@@ -201,6 +201,7 @@ export class ModelsSettingsStore {
  */
 export function providerUsable(row: ProviderRow): boolean {
   if (!row.entry.active) return false
+  if (row.entry.authentication !== undefined) return row.entry.authentication.authenticated
   if (row.apiKeyEnv === undefined) return true
   return row.credential?.configured === true
 }

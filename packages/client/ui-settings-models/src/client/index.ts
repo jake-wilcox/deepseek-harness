@@ -110,6 +110,7 @@ export function apply(ctx: ClientContext): void {
       }),
       ctx.remote.$on('credentials/updated', refreshModels),
       ctx.remote.$on('llm/adapters-updated', refreshModels),
+      ctx.remote.$on('llm/auth-updated', refreshModels),
       ctx.on('connection/reset', refreshAll),
     ]
     return () => { for (const dispose of disposers) dispose() }

@@ -14,7 +14,7 @@
 
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import type { IApiClient } from '@deepseek-ai/dsh-api-remotes/client'
+import type { IApiClient, ProviderAuthenticationView } from '@deepseek-ai/dsh-api-remotes/client'
 import { Button, IconPlusOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-web-react'
 import { CustomProviderCard } from './CustomProviderCard.tsx'
@@ -58,6 +58,8 @@ interface EditorTarget extends ProviderIdentity {
   credentialRef?: string
   /** The adapter reports this route as one it does not ship (see {@link ProviderEditorProps.declared}). */
   declared?: boolean
+  /** Provider-owned interactive authentication state. */
+  authentication?: ProviderAuthenticationView
 }
 
 /** Values that vary around the shared provider-editor rendering. */
@@ -76,6 +78,7 @@ function renderProviderEditor({ target, ...props }: ProviderEditorRenderProps): 
       displayName={target.displayName}
       settingsPath={target.settingsPath}
       {...target.declared === true ? { declared: true } : {}}
+      {...target.authentication === undefined ? {} : { authentication: target.authentication }}
       {...props}
     />
   )
@@ -148,6 +151,7 @@ function targetOf(row: ProviderRow): EditorTarget {
     // route-level fields only a declared route owns off the card, exactly as
     // it leaves the custom tag off the row.
     ...row.entry.declared === true ? { declared: true } : {},
+    ...row.entry.authentication === undefined ? {} : { authentication: row.entry.authentication },
   }
 }
 
@@ -306,10 +310,11 @@ function Loaded({ injected }: { injected: ModelsSectionInjected }): ReactNode {
             )
           }
           const open = !adding && editing?.provider === row.entry.provider
-          const credentialConfigured = row.credential?.configured === true
-          const credentialMissing = !credentialConfigured
-            && row.apiKeyEnv !== undefined
-            && row.credential?.configured === false
+          const credentialConfigured = row.entry.authentication?.authenticated === true
+            || row.credential?.configured === true
+          const credentialMissing = row.entry.authentication !== undefined
+            ? !row.entry.authentication.authenticated
+            : !credentialConfigured && row.apiKeyEnv !== undefined && row.credential?.configured === false
           return (
             <li key={row.entry.provider} className={styles['rowCard']}>
               <div className={styles['rowHead']}>
@@ -420,6 +425,7 @@ function Loaded({ injected }: { injected: ModelsSectionInjected }): ReactNode {
                 hideTitle
                 namespace={addNamespace}
                 settingsPath={addTarget.settingsPath}
+                {...addTarget.authentication === undefined ? {} : { authentication: addTarget.authentication }}
                 api={api}
                 t={t}
                 readOnly={!state.writable}

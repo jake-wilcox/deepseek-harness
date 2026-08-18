@@ -269,6 +269,64 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+.authPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+}
+
+.authStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.authSource {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.deviceCode {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.deviceCode p {
+  margin: 0;
+}
+
+.deviceCode a {
+  color: var(--dsw-alias-label-primary);
+  text-decoration: underline;
+}
+
+.deviceCode code {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-module-platform);
+  font-size: 16px;
+  letter-spacing: 0.08em;
+  color: var(--dsw-alias-label-primary);
+  user-select: all;
+}
+
+.authActions {
+  display: flex;
+  justify-content: flex-start;
+}
+
 .linkButton {
   box-sizing: border-box;
   display: inline-flex;

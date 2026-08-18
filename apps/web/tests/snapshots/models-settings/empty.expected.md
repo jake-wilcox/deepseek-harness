@@ -18,7 +18,7 @@
     - img
     - text: 关闭
   - heading "模型" [level=2]
-  - paragraph: 填入各提供方的 API 密钥即可使用其模型。
+  - paragraph: 添加 API 密钥或登录，即可使用以下提供方的模型。
   - list
   - text: 提供方
   - combobox "提供方":
@@ -44,6 +44,7 @@
     - option "moonshotai-cn"
     - option "nvidia"
     - option "openai"
+    - option "openai-codex"
     - option "opencode"
     - option "opencode-go"
     - option "openrouter"
