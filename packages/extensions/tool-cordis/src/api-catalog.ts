@@ -801,6 +801,41 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     description: 'The abstract `llm` service: an adapter registry plus a streaming model-call API, interceptable via the `llm/stream` waterfall.',
     methods: [
       {
+        signature: 'registerProviderAuthentication(provider: string, definition: LlmProviderAuthentication): () => void',
+        description: 'Register the interactive authentication implementation for one provider. The registration is fiber-scoped; disposal cancels its active attempt.',
+        parameters: [{ name: 'provider', description: 'non-empty provider route.' }, { name: 'definition', description: 'methods, status query, login, and logout implementation.' }],
+        returns: 'the fire-and-forget disposer.',
+      },
+      {
+        signature: 'async providerAuthentication(provider: string): Promise<LlmProviderAuthenticationView | undefined>',
+        description: 'Read one provider\'s current non-secret authentication view.',
+        parameters: [{ name: 'provider', description: 'provider route to inspect.' }],
+        returns: 'the detached view, or `undefined` when no implementation is registered.',
+      },
+      {
+        signature: 'startProviderLogin(provider: string, method: string): LlmProviderLoginAttempt',
+        description: 'Start one provider sign-in attempt without waiting for user interaction. A provider may have only one active attempt; a terminal attempt is replaced.',
+        parameters: [{ name: 'provider', description: 'registered provider route.' }, { name: 'method', description: 'provider-local method identifier.' }],
+        returns: 'the new attempt\'s initial state.',
+      },
+      {
+        signature: 'providerLoginAttempt(provider: string, attemptId: ProviderLoginAttemptId): LlmProviderLoginAttempt',
+        description: 'Read one exact sign-in attempt.',
+        parameters: [{ name: 'provider', description: 'provider route that owns the attempt.' }, { name: 'attemptId', description: 'opaque id returned by {@link startProviderLogin}.' }],
+        returns: 'the detached current attempt state.',
+      },
+      {
+        signature: 'async cancelProviderLogin(provider: string, attemptId: ProviderLoginAttemptId): Promise<LlmProviderLoginAttempt>',
+        description: 'Cancel one exact active sign-in attempt and wait for it to settle.',
+        parameters: [{ name: 'provider', description: 'provider route that owns the attempt.' }, { name: 'attemptId', description: 'opaque attempt identifier.' }],
+        returns: 'the detached terminal state.',
+      },
+      {
+        signature: 'async logoutProvider(provider: string): Promise<void>',
+        description: 'Remove one provider\'s persisted interactive credential.',
+        parameters: [{ name: 'provider', description: 'registered provider route.' }],
+      },
+      {
         signature: 'registerAdapter(providers: string[], adapter: LlmAdapter): AdapterRegistrationHandle',
         description: 'Register an adapter for the given provider routes. Throws `LlmError` with code `DUPLICATE_ADAPTER` if any provider already has an adapter (all-or-nothing). Disposed with the fiber.',
         parameters: [{ name: 'providers', description: 'every provider route this adapter should serve.' }, { name: 'adapter', description: 'the adapter that streams calls for those providers.' }],
@@ -2402,6 +2437,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     parameters: [],
   },
   {
+    name: 'llm/auth-updated',
+    mode: 'emit',
+    signature: '\'llm/auth-updated\'(provider: string): void',
+    summary: 'One provider\'s authentication registration, status, or active sign-in attempt changed.',
+    description: 'One provider\'s authentication registration, status, or active sign-in attempt changed. Consumers re-read that provider\'s authentication view. Observer failures are contained and cannot veto the committed change.',
+    parameters: [{ name: 'provider', description: 'provider route whose authentication changed.' }],
+  },
+  {
     name: 'llm/stream',
     mode: 'waterfall',
     signature: '\'llm/stream\'(this: LlmRuntime, options: GenerateOptions, next: () => AsyncIterable<StreamChunk>): AsyncIterable<StreamChunk>',
@@ -3314,8 +3357,36 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface LlmModelReasoningInfo {\n    efforts: readonly LlmReasoningEffortInfo[];\n    defaultEffort?: ReasoningEffortId;\n}',
   },
   {
+    name: 'LlmProviderAuthentication',
+    declaration: 'export interface LlmProviderAuthentication {\n    methods: readonly LlmProviderAuthMethod[];\n    status(): Promise<LlmProviderAuthStatus>;\n    login(method: string, interaction: LlmProviderAuthInteraction): Promise<void>;\n    logout(): Promise<void>;\n}',
+  },
+  {
+    name: 'LlmProviderAuthenticationView',
+    declaration: 'export interface LlmProviderAuthenticationView extends LlmProviderAuthStatus {\n    provider: string;\n    methods: LlmProviderAuthMethod[];\n    error?: string;\n}',
+  },
+  {
+    name: 'LlmProviderAuthInteraction',
+    declaration: 'export interface LlmProviderAuthInteraction {\n    signal: AbortSignal;\n    notify(notification: LlmProviderAuthNotification): void;\n}',
+  },
+  {
+    name: 'LlmProviderAuthMethod',
+    declaration: 'export interface LlmProviderAuthMethod {\n    id: string;\n    name: string;\n    kind: \'device-code\';\n}',
+  },
+  {
+    name: 'LlmProviderAuthNotification',
+    declaration: 'export type LlmProviderAuthNotification = {\n    kind: \'device-code\';\n    verificationUrl: string;\n    userCode: string;\n    intervalSeconds?: number;\n    expiresInSeconds?: number;\n} | {\n    kind: \'progress\';\n    message: string;\n};',
+  },
+  {
+    name: 'LlmProviderAuthStatus',
+    declaration: 'export interface LlmProviderAuthStatus {\n    authenticated: boolean;\n    source?: string;\n}',
+  },
+  {
     name: 'LlmProviderInfo',
     declaration: 'export interface LlmProviderInfo {\n    id: string;\n    name: string;\n}',
+  },
+  {
+    name: 'LlmProviderLoginAttempt',
+    declaration: 'export interface LlmProviderLoginAttempt {\n    attemptId: ProviderLoginAttemptId;\n    provider: string;\n    method: string;\n    state: \'starting\' | \'waiting\' | \'succeeded\' | \'failed\' | \'cancelled\';\n    notification?: LlmProviderAuthNotification;\n    error?: string;\n}',
   },
   {
     name: 'LlmReasoningEffortInfo',
@@ -3327,7 +3398,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'LlmRuntime',
-    declaration: 'export class LlmRuntime extends Service {\n    constructor(ctx: Context);\n    registerAdapter(providers: string[], adapter: LlmAdapter): AdapterRegistrationHandle;\n    listProviders(): LlmProviderInfo[];\n    registerConfigurableProviders(entries: readonly LlmConfigurableProvider[]): DirectoryRegistrationHandle;\n    listConfigurableProviders(): LlmConfigurableProvider[];\n    registerModelDiscovery(settingsNs: string, discover: (request: LlmModelDiscoveryRequest) => Promise<readonly LlmDiscoveredModel[]>): () => void;\n    async discoverModels(settingsNs: string, request: LlmModelDiscoveryRequest): Promise<LlmDiscoveredModel[]>;\n    providerRetryPolicy(provider: string): ResolvedRetryPolicy;\n    async listModels(provider: string): Promise<LlmModelInfo[]>;\n    async resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;\n    async resolveCallConfig(config: LlmCallConfig, signal?: AbortSignal): Promise<LlmCallConfig>;\n    async prepareCall(config: LlmCallConfig, signal?: AbortSignal): Promise<PreparedLlmCall>;\n    stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
+    declaration: 'export class LlmRuntime extends Service {\n    constructor(ctx: Context);\n    registerProviderAuthentication(provider: string, definition: LlmProviderAuthentication): () => void;\n    async providerAuthentication(provider: string): Promise<LlmProviderAuthenticationView | undefined>;\n    startProviderLogin(provider: string, method: string): LlmProviderLoginAttempt;\n    providerLoginAttempt(provider: string, attemptId: ProviderLoginAttemptId): LlmProviderLoginAttempt;\n    async cancelProviderLogin(provider: string, attemptId: ProviderLoginAttemptId): Promise<LlmProviderLoginAttempt>;\n    async logoutProvider(provider: string): Promise<void>;\n    registerAdapter(providers: string[], adapter: LlmAdapter): AdapterRegistrationHandle;\n    listProviders(): LlmProviderInfo[];\n    registerConfigurableProviders(entries: readonly LlmConfigurableProvider[]): DirectoryRegistrationHandle;\n    listConfigurableProviders(): LlmConfigurableProvider[];\n    registerModelDiscovery(settingsNs: string, discover: (request: LlmModelDiscoveryRequest) => Promise<readonly LlmDiscoveredModel[]>): () => void;\n    async discoverModels(settingsNs: string, request: LlmModelDiscoveryRequest): Promise<LlmDiscoveredModel[]>;\n    providerRetryPolicy(provider: string): ResolvedRetryPolicy;\n    async listModels(provider: string): Promise<LlmModelInfo[]>;\n    async resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;\n    async resolveCallConfig(config: LlmCallConfig,  /* …truncated — full shape in source */',
   },
   {
     name: 'LspHover',
@@ -3556,6 +3627,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'PromptSection',
     declaration: 'export interface PromptSection {\n    readonly name: string;\n    readonly order: number;\n    readonly text: string | ((context: AssembleContext) => string);\n    readonly complete?: boolean;\n}',
+  },
+  {
+    name: 'ProviderLoginAttemptId',
+    declaration: 'export type ProviderLoginAttemptId = Branded<\'ProviderLoginAttemptId\'>;',
   },
   {
     name: 'ProviderRequestId',

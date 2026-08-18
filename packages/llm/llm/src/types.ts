@@ -6,7 +6,7 @@
 
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import type { CallId, ProviderRequestId, ReasoningEffortId } from './brand.ts'
+import type { CallId, ProviderLoginAttemptId, ProviderRequestId, ReasoningEffortId } from './brand.ts'
 import type { Message } from './message.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -21,6 +21,15 @@ declare module '@deepseek-ai/cordis' {
      * @mode emit
      */
     'llm/adapters-updated'(): void
+
+    /**
+     * One provider's authentication registration, status, or active sign-in
+     * attempt changed. Consumers re-read that provider's authentication view.
+     * Observer failures are contained and cannot veto the committed change.
+     * @param provider - provider route whose authentication changed.
+     * @mode emit
+     */
+    'llm/auth-updated'(provider: string): void
   }
 }
 
@@ -146,6 +155,95 @@ export interface LlmProviderInfo {
   id: string
   /** Human-readable provider name for selectors and diagnostics. */
   name: string
+}
+
+/** A provider-owned interactive sign-in method exposed to configuration surfaces. */
+export interface LlmProviderAuthMethod {
+  /** Provider-local stable method identifier. */
+  id: string
+  /** Human-readable action label. */
+  name: string
+  /** Interaction the consumer must be able to present. */
+  kind: 'device-code'
+}
+
+/** Non-secret provider authentication state. */
+export interface LlmProviderAuthStatus {
+  /** Whether the provider can currently authenticate model requests. */
+  authenticated: boolean
+  /** Human-readable credential source, when the provider reports one. */
+  source?: string
+}
+
+/** Progress emitted by a provider-owned sign-in flow. */
+export type LlmProviderAuthNotification = {
+  /** A browser URL and short code the user must enter there. */
+  kind: 'device-code'
+  verificationUrl: string
+  userCode: string
+  intervalSeconds?: number
+  expiresInSeconds?: number
+} | {
+  /** Non-secret progress text supplied by the provider. */
+  kind: 'progress'
+  message: string
+}
+
+/** Consumer callbacks supplied to one provider-owned sign-in flow. */
+export interface LlmProviderAuthInteraction {
+  /** Cancellation for the whole sign-in attempt. */
+  signal: AbortSignal
+  /**
+   * Publish the latest user-visible instruction or progress update.
+   * @param notification - detached, non-secret progress.
+   */
+  notify(notification: LlmProviderAuthNotification): void
+}
+
+/** Provider implementation registered into the LLM authentication seam. */
+export interface LlmProviderAuthentication {
+  /** Interactive methods supported by this provider. */
+  methods: readonly LlmProviderAuthMethod[]
+  /**
+   * Inspect current non-secret authentication state.
+   * @returns whether requests can authenticate and the optional source label.
+   */
+  status(): Promise<LlmProviderAuthStatus>
+  /**
+   * Complete one provider-owned sign-in flow and persist its credential before resolving.
+   * Implementations must settle promptly after {@link LlmProviderAuthInteraction.signal} aborts.
+   * @param method - one identifier declared by {@link methods}.
+   * @param interaction - cancellation and progress callbacks.
+   */
+  login(method: string, interaction: LlmProviderAuthInteraction): Promise<void>
+  /** Remove the provider's persisted interactive credential. */
+  logout(): Promise<void>
+}
+
+/** Authentication state plus the provider's available interactive methods. */
+export interface LlmProviderAuthenticationView extends LlmProviderAuthStatus {
+  /** Provider route this view describes. */
+  provider: string
+  /** Detached interactive methods in provider-preferred order. */
+  methods: LlmProviderAuthMethod[]
+  /** Safe diagnostic when status could not be read. */
+  error?: string
+}
+
+/** Observable state of one provider sign-in attempt. */
+export interface LlmProviderLoginAttempt {
+  /** Opaque identity used to poll or cancel this exact attempt. */
+  attemptId: ProviderLoginAttemptId
+  /** Provider route being authenticated. */
+  provider: string
+  /** Provider-local method being used. */
+  method: string
+  /** Current lifecycle state. */
+  state: 'starting' | 'waiting' | 'succeeded' | 'failed' | 'cancelled'
+  /** Latest provider instruction or progress update. */
+  notification?: LlmProviderAuthNotification
+  /** Safe user-facing summary for a failed attempt. */
+  error?: string
 }
 
 /** Merge-extensible provider model modality vocabulary. */

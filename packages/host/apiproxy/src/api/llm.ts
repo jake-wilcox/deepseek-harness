@@ -4,12 +4,58 @@
  * (which providers CAN be configured, and where their settings live) with the
  * live route registry; `llm.models` is the session-independent model catalog
  * (the same groups as `session.models`, without a per-session selection).
- * Clients invalidate from the forwarded `llm/adapters-updated` and
- * `settings/document-updated` owner events.
+ * Provider rows may also carry non-secret interactive-authentication state.
+ * Clients invalidate from the forwarded `llm/adapters-updated`,
+ * `llm/auth-updated`, and `settings/document-updated` owner events.
  */
 
 import type { RpcRequest, RpcResponse } from './rpc.ts'
 import type { ModelCatalogFailure, ModelProviderGroup } from './sessions.ts'
+import type { ProviderLoginAttemptId } from '@deepseek-ai/dsh-llm/brand'
+
+/** Interactive provider sign-in method exposed by the host. */
+export interface ProviderAuthMethodView {
+  /** Provider-local stable method identifier. */
+  id: string
+  /** Human-readable action label. */
+  name: string
+  /** Interaction the Models page must present. */
+  kind: 'device-code'
+}
+
+/** Non-secret authentication state joined onto one provider row. */
+export interface ProviderAuthenticationView {
+  /** Whether the provider can currently authenticate model requests. */
+  authenticated: boolean
+  /** Human-readable credential source, when available. */
+  source?: string
+  /** Safe diagnostic when status could not be read. */
+  error?: string
+  /** Provider-owned sign-in actions. */
+  methods: ProviderAuthMethodView[]
+}
+
+/** Latest non-secret progress from a provider sign-in flow. */
+export type ProviderAuthNotificationView = {
+  kind: 'device-code'
+  verificationUrl: string
+  userCode: string
+  intervalSeconds?: number
+  expiresInSeconds?: number
+} | {
+  kind: 'progress'
+  message: string
+}
+
+/** Wire view of one asynchronous provider sign-in attempt. */
+export interface ProviderLoginAttemptView {
+  attemptId: ProviderLoginAttemptId
+  provider: string
+  method: string
+  state: 'starting' | 'waiting' | 'succeeded' | 'failed' | 'cancelled'
+  notification?: ProviderAuthNotificationView
+  error?: string
+}
 
 /** Wire view of one configurable provider. */
 export interface ConfigurableProviderView {
@@ -29,6 +75,8 @@ export interface ConfigurableProviderView {
    * surface must treat absence as "unknown", not as "shipped".
    */
   declared?: boolean
+  /** Interactive authentication state when this provider registers one. */
+  authentication?: ProviderAuthenticationView
 }
 
 /** Llm-domain unary methods (the map keys llm.* of RpcMethodMap). */
@@ -74,6 +122,24 @@ export interface LlmApi {
     }>,
     signal?: AbortSignal,
   ): Promise<RpcResponse<{ models: DiscoveredModelView[] }>>
+
+  /** Start an asynchronous provider-owned sign-in flow. */
+  startProviderLogin(
+    request: RpcRequest<{ provider: string; method: string }>,
+  ): Promise<RpcResponse<{ attempt: ProviderLoginAttemptView }>>
+
+  /** Poll one exact provider sign-in attempt. */
+  providerLoginAttempt(
+    request: RpcRequest<{ provider: string; attemptId: ProviderLoginAttemptId }>,
+  ): Promise<RpcResponse<{ attempt: ProviderLoginAttemptView }>>
+
+  /** Cancel one exact active provider sign-in attempt. */
+  cancelProviderLogin(
+    request: RpcRequest<{ provider: string; attemptId: ProviderLoginAttemptId }>,
+  ): Promise<RpcResponse<{ attempt: ProviderLoginAttemptView }>>
+
+  /** Remove one provider's persisted interactive credential. */
+  logoutProvider(request: RpcRequest<{ provider: string }>): Promise<RpcResponse<{}>>
 }
 
 /** Wire view of one model an interrogated endpoint advertises. */

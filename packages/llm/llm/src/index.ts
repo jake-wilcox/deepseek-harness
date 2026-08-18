@@ -15,6 +15,10 @@ import type {
   LlmModelContext,
   LlmModelDiscoveryRequest,
   LlmModelInfo,
+  LlmProviderAuthentication,
+  LlmProviderAuthenticationView,
+  LlmProviderAuthNotification,
+  LlmProviderLoginAttempt,
   LlmResolvedModelInfo,
   LlmProviderInfo,
   ModelModality,
@@ -23,12 +27,13 @@ import type {
 import { freezeMessage, type Message } from './message.ts'
 import { resolveRetryPolicy } from './retry-policy.ts'
 import type { ResolvedRetryPolicy } from './retry-policy.ts'
-import type { ProviderRequestId } from './brand.ts'
+import { ProviderLoginAttemptId, type ProviderRequestId } from './brand.ts'
 import { callConfigEquals, deepFreeze } from './call-config.ts'
 import type { LlmCallConfig, LlmCallConfigAdapterDefaults } from './call-config.ts'
 import { HarnessError, INVALID_CREDENTIAL_CODE } from './error.ts'
 import { normalizeLlmFailure } from './adapter-failure.ts'
 import { normalizeApiKey } from './api-key.ts'
+import { assertNever } from './never.ts'
 
 export * from './attribution.ts'
 export * from './brand.ts'
@@ -277,6 +282,18 @@ export interface DirectoryRegistrationHandle {
   replace(entries: readonly LlmConfigurableProvider[]): void
 }
 
+interface ProviderAuthenticationRegistration {
+  definition: LlmProviderAuthentication
+  methods: ReadonlySet<string>
+  attempt?: ProviderLoginAttemptRecord
+}
+
+interface ProviderLoginAttemptRecord {
+  view: LlmProviderLoginAttempt
+  abort: AbortController
+  done: Promise<void>
+}
+
 /**
  * The abstract `llm` service: an adapter registry plus a streaming model-call
  * API, interceptable via the `llm/stream` waterfall.
@@ -288,6 +305,7 @@ export class LlmRuntime extends Service {
     string,
     (request: LlmModelDiscoveryRequest) => Promise<readonly LlmDiscoveredModel[]>
   >()
+  private authentications = new Map<string, ProviderAuthenticationRegistration>()
 
   constructor(ctx: Context) {
     super(ctx, 'llm')
@@ -325,6 +343,242 @@ export class LlmRuntime extends Service {
   private warnAdaptersListenerFailure(error: unknown): void {
     this.ctx.logger.warn('llm: an llm/adapters-updated listener failed')
     this.ctx.logger.warn(error)
+  }
+
+  /** Publish one provider authentication change with the registry's non-vetoing semantics. */
+  private emitAuthUpdated(provider: string): void {
+    let invariantFailure: unknown
+    for (const listener of this.ctx.events.dispatch('emit', ['llm/auth-updated', provider]) as Array<(provider: string) => unknown>) {
+      try {
+        const returned = listener(provider)
+        if (returned != null && typeof (returned as PromiseLike<unknown>).then === 'function') {
+          void Promise.resolve(returned as PromiseLike<unknown>).then(undefined, (error: unknown) => {
+            this.ctx.logger.warn('llm: an llm/auth-updated listener for "%s" failed', provider)
+            this.ctx.logger.warn(error)
+          })
+        }
+      } catch (error) {
+        if ((error as { code?: unknown } | null)?.code === 'INVARIANT') {
+          invariantFailure ??= error
+          continue
+        }
+        this.ctx.logger.warn('llm: an llm/auth-updated listener for "%s" failed', provider)
+        this.ctx.logger.warn(error)
+      }
+    }
+    if (invariantFailure !== undefined) throw invariantFailure as Error
+  }
+
+  /**
+   * Register the interactive authentication implementation for one provider.
+   * The registration is fiber-scoped; disposal cancels its active attempt.
+   * @param provider - non-empty provider route.
+   * @param definition - methods, status query, login, and logout implementation.
+   * @returns the fire-and-forget disposer.
+   */
+  registerProviderAuthentication(provider: string, definition: LlmProviderAuthentication): () => void {
+    if (provider.length === 0) {
+      throw new LlmError('provider authentication needs a non-empty provider', 'INVALID_PROVIDER_AUTH')
+    }
+    if (this.authentications.has(provider)) {
+      throw new LlmError(`provider authentication for "${provider}" is already registered`, 'DUPLICATE_PROVIDER_AUTH')
+    }
+    if (definition.methods.length === 0) {
+      throw new LlmError(`provider authentication for "${provider}" needs at least one method`, 'INVALID_PROVIDER_AUTH')
+    }
+    const methodIds = new Set<string>()
+    const methods = definition.methods.map((method) => {
+      if (method.id.length === 0 || method.name.length === 0) {
+        throw new LlmError(`provider authentication for "${provider}" has an invalid method`, 'INVALID_PROVIDER_AUTH')
+      }
+      if (methodIds.has(method.id)) {
+        throw new LlmError(`provider authentication for "${provider}" repeats method "${method.id}"`, 'INVALID_PROVIDER_AUTH')
+      }
+      methodIds.add(method.id)
+      return { ...method }
+    })
+    const detached: LlmProviderAuthentication = { ...definition, methods }
+    const registration: ProviderAuthenticationRegistration = { definition: detached, methods: methodIds }
+    const dispose = this.ctx.effect(function* (this: LlmRuntime) {
+      this.authentications.set(provider, registration)
+      this.emitAuthUpdated(provider)
+      yield async () => {
+        registration.attempt?.abort.abort()
+        await registration.attempt?.done
+        this.authentications.delete(provider)
+        this.emitAuthUpdated(provider)
+      }
+    }.bind(this), 'llm.registerProviderAuthentication()')
+    return () => void dispose()
+  }
+
+  /**
+   * Read one provider's current non-secret authentication view.
+   * @param provider - provider route to inspect.
+   * @returns the detached view, or `undefined` when no implementation is registered.
+   */
+  async providerAuthentication(provider: string): Promise<LlmProviderAuthenticationView | undefined> {
+    const registration = this.authentications.get(provider)
+    if (registration === undefined) return undefined
+    let status
+    try {
+      status = await registration.definition.status()
+    } catch (error) {
+      this.ctx.logger.warn('llm: provider authentication status for "%s" failed', provider)
+      this.ctx.logger.warn(error)
+      return {
+        provider,
+        methods: registration.definition.methods.map(method => ({ ...method })),
+        authenticated: false,
+        error: 'Authentication status is unavailable.',
+      }
+    }
+    if (typeof status.authenticated !== 'boolean'
+      || (status.source !== undefined && (typeof status.source !== 'string' || status.source.length === 0))) {
+      throw new LlmError(`provider authentication for "${provider}" returned an invalid status`, 'INVALID_PROVIDER_AUTH')
+    }
+    return {
+      provider,
+      methods: registration.definition.methods.map(method => ({ ...method })),
+      authenticated: status.authenticated,
+      ...status.source === undefined ? {} : { source: status.source },
+    }
+  }
+
+  /**
+   * Start one provider sign-in attempt without waiting for user interaction.
+   * A provider may have only one active attempt; a terminal attempt is replaced.
+   * @param provider - registered provider route.
+   * @param method - provider-local method identifier.
+   * @returns the new attempt's initial state.
+   */
+  startProviderLogin(provider: string, method: string): LlmProviderLoginAttempt {
+    const registration = this.authenticationRegistration(provider)
+    if (!registration.methods.has(method)) {
+      throw new LlmError(`provider "${provider}" has no authentication method "${method}"`, 'INVALID_PROVIDER_AUTH_METHOD')
+    }
+    if (registration.attempt !== undefined && this.attemptIsActive(registration.attempt.view)) {
+      throw new LlmError(`provider "${provider}" already has an active sign-in attempt`, 'PROVIDER_AUTH_IN_PROGRESS')
+    }
+    const abort = new AbortController()
+    const view: LlmProviderLoginAttempt = {
+      attemptId: ProviderLoginAttemptId(crypto.randomUUID()),
+      provider,
+      method,
+      state: 'starting',
+    }
+    const record: ProviderLoginAttemptRecord = {
+      view,
+      abort,
+      done: Promise.resolve(),
+    }
+    registration.attempt = record
+    record.done = Promise.resolve().then(async () => {
+      try {
+        await registration.definition.login(method, {
+          signal: abort.signal,
+          notify: (notification) => {
+            if (registration.attempt !== record || abort.signal.aborted) return
+            record.view = {
+              ...record.view,
+              state: 'waiting',
+              notification: this.detachAuthNotification(notification),
+            }
+            this.emitAuthUpdated(provider)
+          },
+        })
+        record.view = { ...record.view, state: abort.signal.aborted ? 'cancelled' : 'succeeded' }
+      } catch (error) {
+        if (abort.signal.aborted) {
+          record.view = { ...record.view, state: 'cancelled' }
+        } else {
+          this.ctx.logger.warn('llm: provider sign-in for "%s" failed', provider)
+          this.ctx.logger.warn(error)
+          record.view = { ...record.view, state: 'failed', error: 'Sign-in failed. Try again.' }
+        }
+      }
+      this.emitAuthUpdated(provider)
+    })
+    this.emitAuthUpdated(provider)
+    return this.detachLoginAttempt(view)
+  }
+
+  /**
+   * Read one exact sign-in attempt.
+   * @param provider - provider route that owns the attempt.
+   * @param attemptId - opaque id returned by {@link startProviderLogin}.
+   * @returns the detached current attempt state.
+   */
+  providerLoginAttempt(provider: string, attemptId: ProviderLoginAttemptId): LlmProviderLoginAttempt {
+    const attempt = this.authenticationRegistration(provider).attempt
+    if (attempt === undefined || attempt.view.attemptId !== attemptId) {
+      throw new LlmError(`provider "${provider}" has no sign-in attempt "${attemptId}"`, 'NO_PROVIDER_AUTH_ATTEMPT')
+    }
+    return this.detachLoginAttempt(attempt.view)
+  }
+
+  /**
+   * Cancel one exact active sign-in attempt and wait for it to settle.
+   * @param provider - provider route that owns the attempt.
+   * @param attemptId - opaque attempt identifier.
+   * @returns the detached terminal state.
+   */
+  async cancelProviderLogin(provider: string, attemptId: ProviderLoginAttemptId): Promise<LlmProviderLoginAttempt> {
+    const registration = this.authenticationRegistration(provider)
+    const attempt = registration.attempt
+    if (attempt === undefined || attempt.view.attemptId !== attemptId) {
+      throw new LlmError(`provider "${provider}" has no sign-in attempt "${attemptId}"`, 'NO_PROVIDER_AUTH_ATTEMPT')
+    }
+    if (this.attemptIsActive(attempt.view)) attempt.abort.abort()
+    await attempt.done
+    return this.detachLoginAttempt(attempt.view)
+  }
+
+  /**
+   * Remove one provider's persisted interactive credential.
+   * @param provider - registered provider route.
+   */
+  async logoutProvider(provider: string): Promise<void> {
+    const registration = this.authenticationRegistration(provider)
+    const attempt = registration.attempt
+    if (attempt !== undefined && this.attemptIsActive(attempt.view)) {
+      attempt.abort.abort()
+      await attempt.done
+    }
+    await registration.definition.logout()
+    this.emitAuthUpdated(provider)
+  }
+
+  /** Resolve one provider authentication implementation or fail with stable taxonomy. */
+  private authenticationRegistration(provider: string): ProviderAuthenticationRegistration {
+    const registration = this.authentications.get(provider)
+    if (registration === undefined) {
+      throw new LlmError(`no authentication implementation is registered for provider "${provider}"`, 'NO_PROVIDER_AUTH')
+    }
+    return registration
+  }
+
+  /** Whether one attempt can still be cancelled or blocks another start. */
+  private attemptIsActive(attempt: LlmProviderLoginAttempt): boolean {
+    return attempt.state === 'starting' || attempt.state === 'waiting'
+  }
+
+  /** Detach the closed notification union from provider-owned objects. */
+  private detachAuthNotification(notification: LlmProviderAuthNotification): LlmProviderAuthNotification {
+    switch (notification.kind) {
+      case 'device-code': return { ...notification }
+      case 'progress': return { ...notification }
+      /* v8 ignore next -- exhaustive over the closed provider-authentication notification union. */
+      default: return assertNever(notification, 'llm provider authentication notification')
+    }
+  }
+
+  /** Detach a sign-in attempt and its optional notification. */
+  private detachLoginAttempt(attempt: LlmProviderLoginAttempt): LlmProviderLoginAttempt {
+    return {
+      ...attempt,
+      ...attempt.notification === undefined ? {} : { notification: this.detachAuthNotification(attempt.notification) },
+    }
   }
 
   /**

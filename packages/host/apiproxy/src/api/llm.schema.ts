@@ -4,10 +4,63 @@
  */
 
 import { z } from 'zod'
+import type { ProviderLoginAttemptId } from '@deepseek-ai/dsh-llm/brand'
 import type { RequestPayload, ResponseValue } from './rpc-map.ts'
 import type { Wire } from './rpc.schema.ts'
-import type { ConfigurableProviderView, DiscoveredModelView } from './llm.ts'
+import type {
+  ConfigurableProviderView,
+  DiscoveredModelView,
+  ProviderAuthenticationView,
+  ProviderAuthMethodView,
+  ProviderAuthNotificationView,
+  ProviderLoginAttemptView,
+} from './llm.ts'
 import { modelCatalogFailureSchema, modelProviderGroupSchema } from './sessions.schema.ts'
+
+const browserVerificationUrlSchema = z.url().refine((value) => {
+  const protocol = new URL(value).protocol
+  return protocol === 'http:' || protocol === 'https:'
+}, 'verification URL must use http or https')
+
+/** ProviderAuthMethodView row. */
+export const providerAuthMethodViewSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  kind: z.literal('device-code'),
+}) satisfies z.ZodType<Wire<ProviderAuthMethodView>>
+
+/** ProviderAuthenticationView joined onto a provider row. */
+export const providerAuthenticationViewSchema = z.object({
+  authenticated: z.boolean(),
+  source: z.string().min(1).optional(),
+  error: z.string().min(1).optional(),
+  methods: z.array(providerAuthMethodViewSchema).min(1),
+}) satisfies z.ZodType<Wire<ProviderAuthenticationView>>
+
+/** Provider sign-in progress discriminated by kind. */
+export const providerAuthNotificationViewSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('device-code'),
+    verificationUrl: browserVerificationUrlSchema,
+    userCode: z.string().min(1),
+    intervalSeconds: z.number().positive().optional(),
+    expiresInSeconds: z.number().positive().optional(),
+  }),
+  z.object({ kind: z.literal('progress'), message: z.string().min(1) }),
+]) satisfies z.ZodType<Wire<ProviderAuthNotificationView>>
+
+/** ProviderLoginAttemptView returned by lifecycle methods. */
+export const providerLoginAttemptIdSchema = z.string().min(1) as unknown as z.ZodType<ProviderLoginAttemptId>
+
+/** ProviderLoginAttemptView returned by lifecycle methods. */
+export const providerLoginAttemptViewSchema = z.object({
+  attemptId: providerLoginAttemptIdSchema,
+  provider: z.string().min(1),
+  method: z.string().min(1),
+  state: z.enum(['starting', 'waiting', 'succeeded', 'failed', 'cancelled']),
+  notification: providerAuthNotificationViewSchema.optional(),
+  error: z.string().min(1).optional(),
+}) satisfies z.ZodType<Wire<ProviderLoginAttemptView>>
 
 /** ConfigurableProviderView row of llm.providers. */
 export const configurableProviderViewSchema = z.object({
@@ -17,6 +70,7 @@ export const configurableProviderViewSchema = z.object({
   settingsPath: z.array(z.string()),
   active: z.boolean(),
   declared: z.boolean().optional(),
+  authentication: providerAuthenticationViewSchema.optional(),
 }) satisfies z.ZodType<Wire<ConfigurableProviderView>>
 
 /** llm.providers request payload. */
@@ -62,3 +116,42 @@ export const llmDiscoverModelsRequestSchema = z.object({
 export const llmDiscoverModelsValueSchema = z.object({
   models: z.array(discoveredModelViewSchema),
 }) satisfies z.ZodType<Wire<ResponseValue<'llm.discoverModels'>>>
+
+/** llm.startProviderLogin request payload. */
+export const llmStartProviderLoginRequestSchema = z.object({
+  provider: z.string().min(1),
+  method: z.string().min(1),
+}) satisfies z.ZodType<Wire<RequestPayload<'llm.startProviderLogin'>>>
+
+/** llm.startProviderLogin response value. */
+export const llmStartProviderLoginValueSchema = z.object({
+  attempt: providerLoginAttemptViewSchema,
+}) satisfies z.ZodType<Wire<ResponseValue<'llm.startProviderLogin'>>>
+
+/** Shared request payload for exact provider login attempts. */
+const providerLoginAttemptRequestSchema = z.object({
+  provider: z.string().min(1),
+  attemptId: providerLoginAttemptIdSchema,
+})
+
+/** llm.providerLoginAttempt request payload. */
+export const llmProviderLoginAttemptRequestSchema = providerLoginAttemptRequestSchema satisfies z.ZodType<Wire<RequestPayload<'llm.providerLoginAttempt'>>>
+
+/** llm.providerLoginAttempt response value. */
+export const llmProviderLoginAttemptValueSchema = z.object({
+  attempt: providerLoginAttemptViewSchema,
+}) satisfies z.ZodType<Wire<ResponseValue<'llm.providerLoginAttempt'>>>
+
+/** llm.cancelProviderLogin request payload. */
+export const llmCancelProviderLoginRequestSchema = providerLoginAttemptRequestSchema satisfies z.ZodType<Wire<RequestPayload<'llm.cancelProviderLogin'>>>
+
+/** llm.cancelProviderLogin response value. */
+export const llmCancelProviderLoginValueSchema = z.object({
+  attempt: providerLoginAttemptViewSchema,
+}) satisfies z.ZodType<Wire<ResponseValue<'llm.cancelProviderLogin'>>>
+
+/** llm.logoutProvider request payload. */
+export const llmLogoutProviderRequestSchema = z.object({ provider: z.string().min(1) }) satisfies z.ZodType<Wire<RequestPayload<'llm.logoutProvider'>>>
+
+/** llm.logoutProvider response value. */
+export const llmLogoutProviderValueSchema = z.object({}) satisfies z.ZodType<Wire<ResponseValue<'llm.logoutProvider'>>>

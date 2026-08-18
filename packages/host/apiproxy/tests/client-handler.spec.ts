@@ -126,6 +126,10 @@ function scriptedApi(overrides: {
       providers: r => ok(r, { providers: [] }),
       models: r => ok(r, { groups: [], failures: [] }),
       discoverModels: err,
+      startProviderLogin: err,
+      providerLoginAttempt: err,
+      cancelProviderLogin: err,
+      logoutProvider: err,
       ...overrides.llm,
     },
     events: { mux: () => empty<MuxFrame>(), host: () => empty<HostFrame>(), ...overrides.events },
@@ -753,6 +757,16 @@ describe('config unary surface', () => {
         providers: record('llm.providers', r => ok(r, { providers: [providerRow] })),
         models: record('llm.models', r => ok(r, { groups: [group], failures: [] })),
         discoverModels: record('llm.discoverModels', r => ok(r, { models: [{ id: 'acme-large', contextWindow: 65536 }] })),
+        startProviderLogin: record('llm.startProviderLogin', r => ok(r, {
+          attempt: { attemptId: 'attempt' as never, provider: r.payload.provider, method: r.payload.method, state: 'starting' },
+        })),
+        providerLoginAttempt: record('llm.providerLoginAttempt', r => ok(r, {
+          attempt: { attemptId: r.payload.attemptId, provider: r.payload.provider, method: 'device', state: 'succeeded' },
+        })),
+        cancelProviderLogin: record('llm.cancelProviderLogin', r => ok(r, {
+          attempt: { attemptId: r.payload.attemptId, provider: r.payload.provider, method: 'device', state: 'cancelled' },
+        })),
+        logoutProvider: record('llm.logoutProvider', r => ok(r, {})),
       },
     })
     const c = client(api)
@@ -785,11 +799,21 @@ describe('config unary surface', () => {
       apiKey: 'probe-key',
     })
     expect(discovered.result).toEqual({ ok: true, value: { models: [{ id: 'acme-large', contextWindow: 65536 }] } })
+    const login = await c.llm.startProviderLogin({ provider: 'openai-codex', method: 'device' })
+    expect(login.result).toMatchObject({ ok: true, value: { attempt: { state: 'starting' } } })
+    const attemptId = login.result.ok ? login.result.value.attempt.attemptId : 'unreachable' as never
+    expect((await c.llm.providerLoginAttempt({ provider: 'openai-codex', attemptId })).result)
+      .toMatchObject({ ok: true, value: { attempt: { state: 'succeeded' } } })
+    expect((await c.llm.cancelProviderLogin({ provider: 'openai-codex', attemptId })).result)
+      .toMatchObject({ ok: true, value: { attempt: { state: 'cancelled' } } })
+    expect((await c.llm.logoutProvider({ provider: 'openai-codex' })).result)
+      .toEqual({ ok: true, value: {} })
 
     expect(seen.map(call => call.method)).toEqual([
       'settings.describe', 'settings.openDocument', 'settings.update', 'settings.replace', 'settings.mutate',
       'credentials.describe', 'credentials.set', 'credentials.unset',
       'llm.providers', 'llm.models', 'llm.discoverModels',
+      'llm.startProviderLogin', 'llm.providerLoginAttempt', 'llm.cancelProviderLogin', 'llm.logoutProvider',
     ])
     expect(seen[2]?.payload).toEqual({ ns: 'llm-deepseek', patch: { baseURL: 'https://next' } })
     expect(seen[4]?.payload)

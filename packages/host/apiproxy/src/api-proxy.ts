@@ -12,7 +12,13 @@ import type { Agent, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatu
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
 import { AttachmentError } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { contentHasImage, createUserMessage, freezeMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import {
+  contentHasImage,
+  createUserMessage,
+  freezeMessage,
+  ProviderLoginAttemptId,
+  ReasoningEffortId,
+} from '@deepseek-ai/dsh-llm'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
 import { isAppendSurfaceEvent, isJsonValue } from '@deepseek-ai/dsh-session'
@@ -3305,33 +3311,53 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     },
 
     llm: {
-      providers(request) {
+      async providers(request) {
         const registered = ctx.llm.listProviders()
         const active = new Set(registered.map(provider => provider.id))
         const directory = ctx.llm.listConfigurableProviders()
         const declared = new Set(directory.map(entry => entry.provider))
-        const views: ConfigurableProviderView[] = directory.map(entry => ({
-          provider: entry.provider,
-          displayName: entry.displayName,
-          settingsNs: entry.settingsNs,
-          settingsPath: [...entry.settingsPath],
-          active: active.has(entry.provider),
-          ...entry.declared === undefined ? {} : { declared: entry.declared },
+        const views: ConfigurableProviderView[] = await Promise.all(directory.map(async (entry) => {
+          const authentication = await ctx.llm.providerAuthentication(entry.provider)
+          return {
+            provider: entry.provider,
+            displayName: entry.displayName,
+            settingsNs: entry.settingsNs,
+            settingsPath: [...entry.settingsPath],
+            active: active.has(entry.provider),
+            ...entry.declared === undefined ? {} : { declared: entry.declared },
+            ...authentication === undefined ? {} : {
+              authentication: {
+                authenticated: authentication.authenticated,
+                methods: authentication.methods.map(method => ({ ...method })),
+                ...authentication.source === undefined ? {} : { source: authentication.source },
+                ...authentication.error === undefined ? {} : { error: authentication.error },
+              },
+            },
+          }
         }))
         // Routes registered without a directory declaration still appear —
         // they exist and serve models — just with no settings address. No
         // adapter claimed them, so nothing can say whether they are shipped.
         for (const provider of registered) {
           if (declared.has(provider.id)) continue
+          const authentication = await ctx.llm.providerAuthentication(provider.id)
           views.push({
             provider: provider.id,
             displayName: provider.name,
             settingsNs: '',
             settingsPath: [],
             active: true,
+            ...authentication === undefined ? {} : {
+              authentication: {
+                authenticated: authentication.authenticated,
+                methods: authentication.methods.map(method => ({ ...method })),
+                ...authentication.source === undefined ? {} : { source: authentication.source },
+                ...authentication.error === undefined ? {} : { error: authentication.error },
+              },
+            },
           })
         }
-        return Promise.resolve(ok(request, { providers: views }))
+        return ok(request, { providers: views })
       },
 
       async models(request) {
@@ -3358,6 +3384,61 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             code: 'model-discovery-failed',
             message: error instanceof Error ? error.message : String(error),
             details: { settingsNs, ...baseURL === undefined ? {} : { baseURL } },
+          })
+        }
+      },
+
+      startProviderLogin(request) {
+        const { provider, method } = request.payload
+        try {
+          return Promise.resolve(ok(request, { attempt: ctx.llm.startProviderLogin(provider, method) }))
+        } catch (error: unknown) {
+          return Promise.resolve(err(request, {
+            code: 'provider-auth-failed',
+            message: error instanceof Error ? error.message : String(error),
+            details: { provider },
+          }))
+        }
+      },
+
+      providerLoginAttempt(request) {
+        const { provider, attemptId } = request.payload
+        try {
+          return Promise.resolve(ok(request, {
+            attempt: ctx.llm.providerLoginAttempt(provider, ProviderLoginAttemptId(attemptId)),
+          }))
+        } catch (error: unknown) {
+          return Promise.resolve(err(request, {
+            code: 'provider-auth-failed',
+            message: error instanceof Error ? error.message : String(error),
+            details: { provider },
+          }))
+        }
+      },
+
+      async cancelProviderLogin(request) {
+        const { provider, attemptId } = request.payload
+        try {
+          return ok(request, { attempt: await ctx.llm.cancelProviderLogin(provider, ProviderLoginAttemptId(attemptId)) })
+        } catch (error: unknown) {
+          return err(request, {
+            code: 'provider-auth-failed',
+            message: error instanceof Error ? error.message : String(error),
+            details: { provider },
+          })
+        }
+      },
+
+      async logoutProvider(request) {
+        const { provider } = request.payload
+        try {
+          await ctx.llm.logoutProvider(provider)
+          return ok(request, {})
+        } catch (error: unknown) {
+          return err(request, {
+            code: 'provider-auth-failed',
+            message: error instanceof Error ? error.message : String(error),
+            details: { provider },
           })
         }
       },

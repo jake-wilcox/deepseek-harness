@@ -653,6 +653,12 @@ interface LlmCallConfigAdapterDefaults {
 }
 ```
 
+## Provider authentication
+
+Interactive authentication is an optional provider capability beside model streaming. `LlmProviderAuthentication` supplies ordered methods, a non-secret status query, login, and logout; current methods use the `device-code` interaction. Core gives each login a branded `ProviderLoginAttemptId`, runs it outside the starting call, and exposes `LlmProviderLoginAttempt` states (`starting`, `waiting`, `succeeded`, `failed`, or `cancelled`) with only detached device-code/progress data. One provider has at most one active attempt. Implementations own the network protocol and credential persistence, must settle promptly after cancellation, and never return tokens through this seam.
+
+`registerProviderAuthentication()` scopes that implementation to the calling fiber. `providerAuthentication()` returns `LlmProviderAuthenticationView`, while start, poll, cancel, and logout methods operate on an exact provider and attempt. Every registration or attempt commit emits `llm/auth-updated(provider)` as a non-vetoing invalidation; consumers re-read the view. Failures from a provider are logged and reduced to safe display text so an OAuth response cannot leak a credential through the Host wire.
+
 ## Service and provider contracts
 
 `LlmAdapter` is the provider contract: subclass, implement `stream()`, and register one adapter instance with `ctx.llm.registerAdapter(providers, adapter)`. `GenerateOptions.provider` selects the registered adapter; `GenerateOptions.model` is passed to that adapter and need not be registered at lifecycle start. Duplicate provider routes fail atomically. Optional `providerRetryPolicy()` is captured per route with normal defaults, while `providerInfo()` and asynchronous `listModels()` feed `LlmRuntime.listProviders()` / `listModels()` with detached selector metadata. That catalog is advisory rather than a request whitelist: the adapter remains authoritative and may accept unlisted model ids. One asynchronous `resolveModel()` query returns exact model identity plus optional correctness-sensitive context capacity, an adapter-configured `defaultMaxTokens`, and ordered model-owned reasoning ids with an optional deployment default; absent fields mean unavailable metadata or provider-owned behavior, not invalid catalog membership. The resolver receives optional cancellation and must settle promptly after abort. `LlmRuntime.resolveModelInfo()` validates and detaches the aggregate. At the final adapter boundary, `resolveCallConfig()` materializes the output default only when `maxTokens` is absent and validates and materializes reasoning, so direct calls cannot bypass either configured behavior; direct dispatch captures one registration before awaiting that resolution. The agent loop instead uses `prepareCall()` to keep the same registration across model resolution, durable header logging, and dispatch, retain detached context metadata from that exact lookup, and report which config fields the adapter defaulted. Adapter lookup happens at the terminal continuation of the `llm/stream` waterfall, so a listener may short-circuit the call or route a mutable one-shot request before lookup. AgentLoop observes a request attempt once the outer waterfall returns a stream handle; that limited boundary does not prove a lazy terminal adapter was constructed or began provider I/O. The `block-start` / `block-end` `index` correlation and the assembler together mean an adapter only has to emit well-formed chunks — block reassembly is not each adapter's problem. [architecture.md](../architecture.md#turn-flow) shows where `ctx.llm.stream()` and the `llm/stream` waterfall sit in one turn.
@@ -747,6 +753,53 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 The abstract `llm` service: an adapter registry plus a streaming model-call API, interceptable via the `llm/stream` waterfall.
 
 ```ts cordis-catalog
+/**
+ * Register the interactive authentication implementation for one provider.
+ * The registration is fiber-scoped; disposal cancels its active attempt.
+ * @param provider - non-empty provider route.
+ * @param definition - methods, status query, login, and logout implementation.
+ * @returns the fire-and-forget disposer.
+ */
+registerProviderAuthentication(provider: string, definition: LlmProviderAuthentication): () => void
+
+/**
+ * Read one provider's current non-secret authentication view.
+ * @param provider - provider route to inspect.
+ * @returns the detached view, or `undefined` when no implementation is registered.
+ */
+async providerAuthentication(provider: string): Promise<LlmProviderAuthenticationView | undefined>
+
+/**
+ * Start one provider sign-in attempt without waiting for user interaction.
+ * A provider may have only one active attempt; a terminal attempt is replaced.
+ * @param provider - registered provider route.
+ * @param method - provider-local method identifier.
+ * @returns the new attempt's initial state.
+ */
+startProviderLogin(provider: string, method: string): LlmProviderLoginAttempt
+
+/**
+ * Read one exact sign-in attempt.
+ * @param provider - provider route that owns the attempt.
+ * @param attemptId - opaque id returned by {@link startProviderLogin}.
+ * @returns the detached current attempt state.
+ */
+providerLoginAttempt(provider: string, attemptId: ProviderLoginAttemptId): LlmProviderLoginAttempt
+
+/**
+ * Cancel one exact active sign-in attempt and wait for it to settle.
+ * @param provider - provider route that owns the attempt.
+ * @param attemptId - opaque attempt identifier.
+ * @returns the detached terminal state.
+ */
+async cancelProviderLogin(provider: string, attemptId: ProviderLoginAttemptId): Promise<LlmProviderLoginAttempt>
+
+/**
+ * Remove one provider's persisted interactive credential.
+ * @param provider - registered provider route.
+ */
+async logoutProvider(provider: string): Promise<void>
+
 /**
  * Register an adapter for the given provider routes. Throws `LlmError` with code
  * `DUPLICATE_ADAPTER` if any provider already has an adapter (all-or-nothing).
@@ -864,7 +917,7 @@ async prepareCall(config: LlmCallConfig, signal?: AbortSignal): Promise<Prepared
 stream(options: GenerateOptions): AsyncIterable<StreamChunk>
 ```
 
-Source: [`packages/llm/llm/src/index.ts:284`](../../packages/llm/llm/src/index.ts)
+Source: [`packages/llm/llm/src/index.ts:301`](../../packages/llm/llm/src/index.ts)
 
 <a id="llm-events"></a>
 
@@ -891,6 +944,25 @@ The provider topology changed: an adapter registered or unregistered routes, or 
 
 Source: [`packages/llm/llm/src/types.ts:23`](../../packages/llm/llm/src/types.ts)
 
+<a id="llmauth-updated--emit"></a>
+
+#### `llm/auth-updated` — emit
+
+One provider's authentication registration, status, or active sign-in attempt changed. Consumers re-read that provider's authentication view. Observer failures are contained and cannot veto the committed change.
+
+```ts cordis-catalog
+/**
+ * One provider's authentication registration, status, or active sign-in
+ * attempt changed. Consumers re-read that provider's authentication view.
+ * Observer failures are contained and cannot veto the committed change.
+ * @param provider - provider route whose authentication changed.
+ * @mode emit
+ */
+'llm/auth-updated'(provider: string): void
+```
+
+Source: [`packages/llm/llm/src/types.ts:32`](../../packages/llm/llm/src/types.ts)
+
 <a id="llmstream--waterfall"></a>
 
 #### `llm/stream` — waterfall
@@ -913,5 +985,5 @@ Waterfall around every streaming model call (retry, replay, routing). Bound to t
 'llm/stream'(this: LlmRuntime, options: GenerateOptions, next: () => AsyncIterable<StreamChunk>): AsyncIterable<StreamChunk>
 ```
 
-Source: [`packages/llm/llm/src/index.ts:64`](../../packages/llm/llm/src/index.ts)
+Source: [`packages/llm/llm/src/index.ts:69`](../../packages/llm/llm/src/index.ts)
 <!-- END GENERATED cordis-surface -->

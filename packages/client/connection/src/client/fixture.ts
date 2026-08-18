@@ -2961,6 +2961,31 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
       discoverModels: request => ok(request, {
         models: fixtureModelGroups().flatMap(group => group.models.map(model => ({ id: model.id, name: model.name }))),
       }),
+      startProviderLogin: request => ok(request, {
+        attempt: {
+          attemptId: 'fixture-provider-login' as never,
+          provider: request.payload.provider,
+          method: request.payload.method,
+          state: 'succeeded',
+        },
+      }),
+      providerLoginAttempt: request => ok(request, {
+        attempt: {
+          attemptId: request.payload.attemptId,
+          provider: request.payload.provider,
+          method: 'fixture',
+          state: 'succeeded',
+        },
+      }),
+      cancelProviderLogin: request => ok(request, {
+        attempt: {
+          attemptId: request.payload.attemptId,
+          provider: request.payload.provider,
+          method: 'fixture',
+          state: 'cancelled',
+        },
+      }),
+      logoutProvider: request => ok(request, {}),
     },
     respond(message: ClientResponse): Promise<RpcReceipt> {
       // Same routing discipline as the host: rpcId first, then the payload's
@@ -3129,6 +3154,10 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'llm.providers': return this.api.llm.providers(request)
       case 'llm.models': return this.api.llm.models(request)
       case 'llm.discoverModels': return this.api.llm.discoverModels(request, signal)
+      case 'llm.startProviderLogin': return this.api.llm.startProviderLogin(request)
+      case 'llm.providerLoginAttempt': return this.api.llm.providerLoginAttempt(request)
+      case 'llm.cancelProviderLogin': return this.api.llm.cancelProviderLogin(request)
+      case 'llm.logoutProvider': return this.api.llm.logoutProvider(request)
     }
   }
 

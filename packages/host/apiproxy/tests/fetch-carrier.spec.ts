@@ -281,6 +281,18 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
       async discoverModels(request) {
         return { rpcId: request.rpcId, result: { ok: true, value: { models: [] } } }
       },
+      async startProviderLogin(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { attempt: { attemptId: 'a' as never, provider: request.payload.provider, method: request.payload.method, state: 'starting' as const } } } }
+      },
+      async providerLoginAttempt(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { attempt: { attemptId: request.payload.attemptId, provider: request.payload.provider, method: 'm', state: 'succeeded' as const } } } }
+      },
+      async cancelProviderLogin(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { attempt: { attemptId: request.payload.attemptId, provider: request.payload.provider, method: 'm', state: 'cancelled' as const } } } }
+      },
+      async logoutProvider(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: {} } }
+      },
     },
     events: {
       mux: (_request, signal) => stream(muxFrames, signal),

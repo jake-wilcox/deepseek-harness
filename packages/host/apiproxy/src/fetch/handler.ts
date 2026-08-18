@@ -63,7 +63,15 @@ import {
 import {
   credentialsDescribeRequestSchema, credentialsSetRequestSchema, credentialsUnsetRequestSchema,
 } from '../api/credentials.schema.ts'
-import { llmDiscoverModelsRequestSchema, llmModelsRequestSchema, llmProvidersRequestSchema } from '../api/llm.schema.ts'
+import {
+  llmCancelProviderLoginRequestSchema,
+  llmDiscoverModelsRequestSchema,
+  llmLogoutProviderRequestSchema,
+  llmModelsRequestSchema,
+  llmProviderLoginAttemptRequestSchema,
+  llmProvidersRequestSchema,
+  llmStartProviderLoginRequestSchema,
+} from '../api/llm.schema.ts'
 import {
   subagentHistoryRequestSchema,
   subagentInterruptRequestSchema,
@@ -140,6 +148,10 @@ const UNARY_ROUTES: UnaryRoutes = {
   'llm.providers': { schema: llmProvidersRequestSchema, invoke: (api, r) => api.llm.providers(r) },
   'llm.models': { schema: llmModelsRequestSchema, invoke: (api, r) => api.llm.models(r) },
   'llm.discoverModels': { schema: llmDiscoverModelsRequestSchema, invoke: (api, r, signal) => api.llm.discoverModels(r, signal) },
+  'llm.startProviderLogin': { schema: llmStartProviderLoginRequestSchema, invoke: (api, r) => api.llm.startProviderLogin(r) },
+  'llm.providerLoginAttempt': { schema: llmProviderLoginAttemptRequestSchema, invoke: (api, r) => api.llm.providerLoginAttempt(r) },
+  'llm.cancelProviderLogin': { schema: llmCancelProviderLoginRequestSchema, invoke: (api, r) => api.llm.cancelProviderLogin(r) },
+  'llm.logoutProvider': { schema: llmLogoutProviderRequestSchema, invoke: (api, r) => api.llm.logoutProvider(r) },
 }
 
 /** Route lookup that narrows an arbitrary path segment to a map key (single cast point for the string→key refinement). */

@@ -17,6 +17,10 @@ An adapter registry plus a single streaming call API, interceptable via a waterf
 - `ctx.llm.registerModelDiscovery(settingsNs: string, discover): () => void` Offer to interrogate provider endpoints for the settings namespace this plugin owns. One offer per namespace (`INVALID_DISCOVERY`/`DUPLICATE_DISCOVERY`), disposed with the calling fiber.
 - `ctx.llm.listModelDiscoveryNamespaces(): string[]` List the namespaces that can interrogate an endpoint, so a surface offers the action only where it works.
 - `ctx.llm.discoverModels(settingsNs: string, request: LlmModelDiscoveryRequest): Promise<LlmDiscoveredModel[]>` Ask one endpoint which models it advertises.
+- `ctx.llm.registerProviderAuthentication(provider, definition): () => void` Register one provider-owned interactive-authentication implementation. Methods, status, login, and logout are fiber-scoped; disposal cancels an active login.
+- `ctx.llm.providerAuthentication(provider): Promise<LlmProviderAuthenticationView | undefined>` Read detached, non-secret status and the available interaction methods.
+- `ctx.llm.startProviderLogin(provider, method): LlmProviderLoginAttempt`, `providerLoginAttempt(provider, attemptId)`, and `cancelProviderLogin(provider, attemptId)` start, observe, and cancel one background login. Only one attempt per provider may be active.
+- `ctx.llm.logoutProvider(provider): Promise<void>` Cancel an active login and remove the provider's persisted interactive credential.
 - `ctx.llm.providerRetryPolicy(provider: string): ResolvedRetryPolicy` Return the provider-owned retry policy captured during registration, with normal defaults resolved.
 - `ctx.llm.listModels(provider: string): Promise<LlmModelInfo[]>` Discover the models one registered provider currently advertises.
 - `ctx.llm.resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>` Resolve validated exact-model identity plus available context, output-default, and reasoning metadata from the owning adapter, with optional cancellation for asynchronous adapters.
@@ -32,6 +36,8 @@ Provider and model metadata is a discovery surface, not a routing whitelist. `re
 
 Every topology commit point — adapter routes registering or disposing, directory entries appearing or withdrawing — emits the payload-free `llm/adapters-updated` event after the mutation, so consumers re-read `listProviders()`/`listModels()`/`listConfigurableProviders()` instead of polling. Observer failures are contained (logged, non-vetoing); only `INVARIANT`-coded failures rethrow after the fan-out.
 
+Interactive authentication is provider-neutral at this seam and provider-owned below it. Core tracks attempts and exposes only display-safe progress (`device-code` or progress text); an implementation owns the protocol exchange, credential persistence, refresh, and logout. Login runs in the background so an RPC can return the attempt id before the user visits another page. Terminal attempts remain readable until the next attempt replaces them, while provider errors are logged and reduced to a safe failure message. Registration, progress, completion, cancellation, logout, and disposal emit `llm/auth-updated(provider)` so clients re-read that provider's view.
+
 Exact-model metadata is a separate correctness query, not a catalog decoration or global LLM setting. `resolveModelInfo()` asks the adapter that owns the exact provider/model route once; an adapter can describe an unlisted dynamic model, and absent `context`, `defaultMaxTokens`, or `reasoning` fields preserve unknown capacity, provider-owned output defaults, or unavailable reasoning capability. Invalid identity, context, output default, or reasoning metadata fails with `INVALID_MODEL_INFO`, `INVALID_MODEL_CONTEXT`, `INVALID_MODEL_MAX_TOKENS`, or `INVALID_MODEL_REASONING`.
 
 `defaultMaxTokens` is an adapter-configured per-request output cap, not a model hard limit. `resolveCallConfig()` materializes it only when the request omits `maxTokens`; an explicit cap wins. Reasoning identifiers are opaque adapter-owned strings rather than a core enum: the same resolution accepts only an exact advertised identifier, materializes `defaultEffort` when present, and otherwise preserves the provider default. Asynchronous model resolvers receive the caller's signal and must settle promptly after cancellation. `prepareCall()` additionally exposes detached context metadata from the same lookup, reports which `maxTokens` and `reasoningEffort` fields it materialized in `adapterDefaults`, and retains the exact adapter registration through header logging and terminal dispatch, so HMR cannot combine one adapter's capability result with another adapter's request; reusing its one-shot handle or changing its call-config fields fails with `INVALID_PREPARED_CALL`. An unsupported explicit or configured effort fails with `UNSUPPORTED_REASONING_EFFORT` before provider I/O.
@@ -41,6 +47,7 @@ Exact-model metadata is a separate correctness query, not a catalog decoration o
 | Event | Mode | Purpose |
 |---|---|---|
 | `llm/stream` | waterfall | Intercept/wrap every streaming model call for caching, logging, or routing |
+| `llm/auth-updated` | emit | Re-read one provider's authentication state after lifecycle or status changes |
 
 ### Extension points
 

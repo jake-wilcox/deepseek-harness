@@ -17,6 +17,10 @@
 - `ctx.llm.registerModelDiscovery(settingsNs: string, discover): () => void` 为本插件拥有的 settings namespace 提供查询提供方端点的能力。每个 namespace 只能有一个（`INVALID_DISCOVERY`/`DUPLICATE_DISCOVERY`），并随调用 fiber dispose。
 - `ctx.llm.listModelDiscoveryNamespaces(): string[]` 列出可以询问端点的 namespace，让界面只在可用之处提供该动作。
 - `ctx.llm.discoverModels(settingsNs: string, request: LlmModelDiscoveryRequest): Promise<LlmDiscoveredModel[]>` 询问某个端点它公布了哪些模型。
+- `ctx.llm.registerProviderAuthentication(provider, definition): () => void` 注册一个由提供方拥有的交互式认证实现。认证方式、状态、登录和退出随 fiber 生命周期管理；dispose 会取消活动登录。
+- `ctx.llm.providerAuthentication(provider): Promise<LlmProviderAuthenticationView | undefined>` 读取已分离、不含机密的状态和可用交互方式。
+- `ctx.llm.startProviderLogin(provider, method): LlmProviderLoginAttempt`、`providerLoginAttempt(provider, attemptId)` 与 `cancelProviderLogin(provider, attemptId)` 用于启动、观察和取消后台登录。每个提供方同一时刻只能有一次活动尝试。
+- `ctx.llm.logoutProvider(provider): Promise<void>` 取消活动登录并移除该提供方持久化的交互式凭据。
 - `ctx.llm.providerRetryPolicy(provider: string): ResolvedRetryPolicy` 返回注册时捕获的提供方自身的重试策略，并解析 normal 默认值。
 - `ctx.llm.listModels(provider: string): Promise<LlmModelInfo[]>` 发现某个已注册提供方当前公布的模型。
 - `ctx.llm.resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>` 从拥有该精确路由的适配器中，解析并校验确切模型身份，以及可用上下文、输出默认值和推理（reasoning）元数据；异步适配器可选地支持取消。
@@ -32,6 +36,8 @@
 
 每个拓扑提交点——适配器路由注册或 dispose、目录条目出现或撤回——都会在变更之后发出无载荷的 `llm/adapters-updated` 事件，消费方因此会重新读取 `listProviders()`/`listModels()`/`listConfigurableProviders()`，而不是轮询。观察者故障会被记录并隔离，不能否决变更；只有带 `INVARIANT` 码的故障会在通知完所有观察者后重新抛出。
 
+交互式认证在本 seam 中保持提供方无关，在下层则归提供方所有。Core 负责跟踪尝试，并且只暴露适合显示的进度（`device-code` 或进度文本）；具体实现负责协议交换、凭据持久化、刷新和退出。登录在后台运行，因此 RPC 能在用户前往另一页面之前先返回尝试 id。终止后的尝试会保留到下一次尝试将其替换；提供方错误写入日志，对外只给出安全的失败信息。注册、进度、完成、取消、退出和 dispose 都会发出 `llm/auth-updated(provider)`，客户端据此重新读取该提供方的视图。
+
 确切模型元数据是独立的正确性查询，不是 catalog 装饰或全局 LLM 设置。`resolveModelInfo()` 会向拥有精确提供方／模型路由的适配器查询一次；适配器可以描述未列出的动态模型。缺少 `context` 表示模型容量未知；缺少 `defaultMaxTokens` 表示继续沿用提供方自身的输出默认值；缺少 `reasoning` 则表示推理能力不可用。无效的身份、上下文、输出默认值或推理元数据会以 `INVALID_MODEL_INFO`、`INVALID_MODEL_CONTEXT`、`INVALID_MODEL_MAX_TOKENS` 或 `INVALID_MODEL_REASONING` 失败。
 
 `defaultMaxTokens` 是适配器配置的单次请求输出上限，不是模型硬上限。仅当请求省略 `maxTokens` 时，`resolveCallConfig()` 才会填入该值；显式上限优先。推理标识符是由适配器定义的不透明字符串，而非核心枚举：同一次解析只接受与已公布标识符完全一致的值，在存在 `defaultEffort` 时填入它，否则保留提供方默认值。异步模型解析器会接收调用方信号，并且必须在取消后尽快结算。`prepareCall()` 还会返回同一次查询得到的、与适配器内部状态分离的上下文元数据，通过 `adapterDefaults` 标明填入了哪些 `maxTokens` 和 `reasoningEffort` 字段，并在请求头记录和最终分发期间始终保留同一项精确的适配器注册。因此，HMR（热模块替换）不会把一个适配器的能力结果与另一个适配器的请求混用；复用其一次性句柄或更改调用配置字段会以 `INVALID_PREPARED_CALL` 失败。不支持的显式或配置推理强度会在提供方 I/O 前以 `UNSUPPORTED_REASONING_EFFORT` 失败。
@@ -41,6 +47,7 @@
 | 事件 | 模式 | 用途 |
 |---|---|---|
 | `llm/stream` | waterfall | 拦截／包装每次流式模型调用，用于缓存、日志或路由 |
+| `llm/auth-updated` | emit | 认证生命周期或状态变化后重新读取一个提供方的认证状态 |
 
 ### 扩展点
 

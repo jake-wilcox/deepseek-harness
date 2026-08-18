@@ -62,3 +62,15 @@ export type ReasoningEffortId = Branded<'ReasoningEffortId'>
 export function ReasoningEffortId(id: string): ReasoningEffortId {
   return id as ReasoningEffortId
 }
+
+/** Identifies one provider sign-in attempt across host and client processes. */
+export type ProviderLoginAttemptId = Branded<'ProviderLoginAttemptId'>
+
+/**
+ * Brand a provider sign-in attempt identifier.
+ * @param id - the opaque attempt identifier.
+ * @returns the same string, branded; no validation is performed.
+ */
+export function ProviderLoginAttemptId(id: string): ProviderLoginAttemptId {
+  return id as ProviderLoginAttemptId
+}

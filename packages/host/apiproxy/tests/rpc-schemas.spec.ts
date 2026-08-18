@@ -37,6 +37,7 @@ import { approvalRequestIdSchema, approvalResponsePayloadSchema } from '../src/a
 import { askUserQuestionAnswerSchema, questionResponsePayloadSchema } from '../src/api/questions.schema.ts'
 import { goalEditRequestSchema } from '../src/api/goals.schema.ts'
 import { subagentPromptRequestSchema } from '../src/api/subagents.schema.ts'
+import { providerAuthNotificationViewSchema } from '../src/api/llm.schema.ts'
 
 describe('RpcId', () => {
   it('brands a raw string at zero runtime cost', () => {
@@ -45,6 +46,21 @@ describe('RpcId', () => {
     // No min-length: the id is an opaque echo token (see rpcIdSchema's contract).
     expect(rpcIdSchema.parse('')).toBe('')
     expect(() => rpcIdSchema.parse(42)).toThrow()
+  })
+})
+
+describe('provider authentication schemas', () => {
+  it('accepts browser verification URLs and rejects executable schemes', () => {
+    expect(providerAuthNotificationViewSchema.parse({
+      kind: 'device-code',
+      verificationUrl: 'https://auth.example/device',
+      userCode: 'ABCD-EFGH',
+    }).kind).toBe('device-code')
+    expect(() => providerAuthNotificationViewSchema.parse({
+      kind: 'device-code',
+      verificationUrl: 'javascript:alert(1)',
+      userCode: 'ABCD-EFGH',
+    })).toThrow(/http or https/)
   })
 })
 
@@ -526,6 +542,7 @@ describe('events frame schemas', () => {
       { type: 'host/remote-event', event: 'settings/document-updated', args: ['ns', 3] },
       { type: 'host/remote-event', event: 'agent-preset/selected', args: ['s', 'minimal'] },
       { type: 'host/remote-event', event: 'llm/adapters-updated', args: [] },
+      { type: 'host/remote-event', event: 'llm/auth-updated', args: ['openai-codex'] },
       { type: 'stream/error', error: { code: 'internal', message: 'm', details: {} } },
     ]
     for (const frame of frames) expect(hostFrameSchema.parse(frame)).toMatchObject({ type: frame.type })

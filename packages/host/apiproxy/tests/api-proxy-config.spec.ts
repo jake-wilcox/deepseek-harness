@@ -1,8 +1,8 @@
 /**
  * Settings/credentials/llm RPC domains and their host-stream frames over
  * createApiProxy: layered redacted describe, write-path rejection mapping,
- * value-free credential views, the directory/live-route merge, and the three
- * invalidation frames (settings/credentials/models changed).
+ * value-free credential views, the directory/live-route/authentication merge,
+ * and the four invalidation frames (settings/credentials/models/auth changed).
  */
 
 import { describe, expect, it, vi } from 'vitest'
@@ -14,7 +14,13 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import LlmRuntime, { LlmAdapter } from '@deepseek-ai/dsh-llm'
-import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type {
+  GenerateOptions,
+  LlmModelInfo,
+  LlmProviderAuthInteraction,
+  LlmProviderInfo,
+  StreamChunk,
+} from '@deepseek-ai/dsh-llm'
 import { SettingsProvider, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
@@ -682,6 +688,74 @@ describe('llm domain', () => {
       { type: 'host/remote-event', event: 'llm/adapters-updated', args: [] },
       { type: 'host/remote-event', event: 'llm/adapters-updated', args: [] },
     ])
+  })
+
+  it('joins provider auth and drives its asynchronous lifecycle without exposing credentials', async () => {
+    const ctx = await harness()
+    const gate = Promise.withResolvers<undefined>()
+    let authenticated = false
+    let interaction: LlmProviderAuthInteraction | undefined
+    const logout = vi.fn(async () => { authenticated = false })
+    ctx.llm.registerProviderAuthentication('deepseek-official', {
+      methods: [{ id: 'device', name: 'Sign in', kind: 'device-code' }],
+      status: () => Promise.resolve({ authenticated, ...authenticated ? { source: 'OAuth' } : {} }),
+      login: async (_method, active) => {
+        interaction = active
+        active.notify({
+          kind: 'device-code',
+          verificationUrl: 'https://example.test/device',
+          userCode: 'ABCD-EFGH',
+        })
+        await gate.promise
+        authenticated = true
+      },
+      logout,
+    })
+    const api = createApiProxy(ctx, DEFAULTS)
+
+    expect(expectOk(await api.llm.providers(request({}))).providers[0]?.authentication).toEqual({
+      authenticated: false,
+      methods: [{ id: 'device', name: 'Sign in', kind: 'device-code' }],
+    })
+    const started = expectOk(await api.llm.startProviderLogin(request({
+      provider: 'deepseek-official',
+      method: 'device',
+    }))).attempt
+    await vi.waitFor(async () => {
+      const current = expectOk(await api.llm.providerLoginAttempt(request({
+        provider: 'deepseek-official',
+        attemptId: started.attemptId,
+      }))).attempt
+      expect(current).toMatchObject({
+        state: 'waiting',
+        notification: { kind: 'device-code', userCode: 'ABCD-EFGH' },
+      })
+    })
+    expect(interaction?.signal.aborted).toBe(false)
+    gate.resolve(undefined)
+    await vi.waitFor(async () => {
+      expect(expectOk(await api.llm.providerLoginAttempt(request({
+        provider: 'deepseek-official',
+        attemptId: started.attemptId,
+      }))).attempt.state).toBe('succeeded')
+    })
+    expect(expectOk(await api.llm.providers(request({}))).providers[0]?.authentication).toMatchObject({
+      authenticated: true,
+      source: 'OAuth',
+    })
+    expect(JSON.stringify(expectOk(await api.llm.providers(request({}))))).not.toContain('token')
+    expectOk(await api.llm.logoutProvider(request({ provider: 'deepseek-official' })))
+    expect(logout).toHaveBeenCalledOnce()
+  })
+
+  it('maps invalid provider authentication operations to provider-auth-failed', async () => {
+    const ctx = await harness()
+    const api = createApiProxy(ctx, DEFAULTS)
+    const error = expectErr(await api.llm.startProviderLogin(request({
+      provider: 'deepseek-official',
+      method: 'missing',
+    })))
+    expect(error).toMatchObject({ code: 'provider-auth-failed', details: { provider: 'deepseek-official' } })
   })
 })
 
