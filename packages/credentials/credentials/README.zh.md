@@ -25,9 +25,11 @@ await ctx.credentials.set(ref, 'sk-…')                   // rejects while a re
 await ctx.credentials.unset(ref)                         // no-op when absent; same shadowing rule
 ```
 
-`credentials/updated (ref)` 在提供方管理的来源发生已提交变更后触发——`set`、`unset` 或在存储中观察到的外部编辑。进程环境变量的变化不可观测，永不触发。消费方不需要该事件（它们按操作重新解析）；它服务于配置界面刷新「已配置」徽标。它的声明住在 client-safe 的 `./types` 子路径出口，与其点名的 `CredentialRef` 类型同处一处（包根继续 re-export 该类型），于是 Host 编译面之外的消费方读到的正是 Host 发射的那一份签名，而不必再写一遍。
+`modify(ref, update)` 是为 OAuth 轮换凭据等机密提供的串行 read-modify-write 操作。回调看到确切的当前值并返回替换值；返回 `undefined` 表示保留当前值。提供方将其与 `set`、`unset` 串行化；持久提供方还会在回调运行期间持有跨进程写锁，因此两个进程不会同时用同一个一次性 token 做刷新。删除请使用 `unset`。
 
-`set`/`unset` 的遮蔽规则有意采用明确报错的方式：当只读来源（本地提供方中即当前进程环境）正在提供该引用时，写入会表面成功而解析仍返回遮蔽值——seam 选择直接拒绝，并通过 `describe().writable` 让界面提前把该引用渲染为只读。
+`credentials/updated (ref)` 在提供方管理的来源发生已提交变更后触发——`set`、`unset`、`modify` 产生的替换，或在存储中观察到的外部编辑。进程环境变量的变化不可观测，永不触发。消费方不需要该事件（它们按操作重新解析）；它服务于配置界面刷新「已配置」徽标。它的声明住在 client-safe 的 `./types` 子路径出口，与其点名的 `CredentialRef` 类型同处一处（包根继续 re-export 该类型），于是 Host 编译面之外的消费方读到的正是 Host 发射的那一份签名，而不必再写一遍。
+
+`set`/`modify`/`unset` 的遮蔽规则有意采用明确报错的方式：当只读来源（本地提供方中即当前进程环境）正在提供该引用时，写入会表面成功而解析仍返回遮蔽值——seam 选择直接拒绝，并通过 `describe().writable` 让界面提前把该引用渲染为只读。
 
 ## 提供方
 

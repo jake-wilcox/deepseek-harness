@@ -52,7 +52,7 @@ declare module '@deepseek-ai/cordis' {
 }
 
 /**
- * Abstract credential service. Providers implement the four operations over
+ * Abstract credential service. Providers implement the five operations over
  * their source layers; one seam-wide rule binds them all: an empty stored
  * value is absent everywhere — `resolve` skips it, `describe` reports it
  * unconfigured — so a blank never masquerades as a configured secret.
@@ -79,6 +79,26 @@ export abstract class CredentialProvider extends Service {
    * @returns configured state, supplying source, and writability.
    */
   abstract describe(ref: CredentialRef): Promise<CredentialInfo>
+
+  /**
+   * Atomically inspect and optionally replace one value. Providers serialize
+   * the callback with every write for the same backing source; file-backed
+   * providers also hold their cross-process writer lock while it runs. The
+   * callback returns `undefined` to keep the current value unchanged. It
+   * cannot delete a value; use {@link unset} for an explicit removal.
+   *
+   * This operation exists for rotating credentials whose replacement depends
+   * on the exact current value, such as an OAuth refresh token. Holding the
+   * callback under the provider's write exclusion prevents two processes from
+   * exchanging the same single-use token concurrently.
+   * @param ref - the reference to inspect and possibly replace.
+   * @param update - serialized read-modify-write callback.
+   * @returns the effective value after the operation, or `undefined` while absent.
+   */
+  abstract modify(
+    ref: CredentialRef,
+    update: (current: string | undefined) => Promise<string | undefined>,
+  ): Promise<string | undefined>
 
   /**
    * Durably store one value in the provider-managed writable source. Rejects

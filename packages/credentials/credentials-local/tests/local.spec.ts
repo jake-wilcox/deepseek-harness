@@ -337,6 +337,58 @@ describe('document writes', () => {
     vi.stubEnv('DSH_CRED_TEST', 'shadowing')
     await expect(ctx.credentials.set(KEY, 'next')).rejects.toThrow(/shadowed/)
     await expect(ctx.credentials.unset(KEY)).rejects.toThrow(/shadowed/)
+    await expect(ctx.credentials.modify(KEY, () => Promise.resolve('next'))).rejects.toThrow(/shadowed/)
+  })
+
+  it('holds serialized mutation across an asynchronous read-modify-write', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    await writeCredentials(path, 'DSH_CRED_TEST: start\n')
+    const ctx = await boot({ path, watch: false })
+    const release = Promise.withResolvers<undefined>()
+    const first = ctx.credentials.modify(KEY, async (current) => {
+      await release.promise
+      return `${current ?? ''}-one`
+    })
+    const second = ctx.credentials.modify(KEY, current => Promise.resolve(`${current ?? ''}-two`))
+
+    release.resolve(undefined)
+    await expect(first).resolves.toBe('start-one')
+    await expect(second).resolves.toBe('start-one-two')
+    await expect(ctx.credentials.modify(KEY, () => Promise.resolve(undefined))).resolves.toBe('start-one-two')
+    expect(await readFile(path, 'utf8')).toBe('DSH_CRED_TEST: start-one-two\n')
+  })
+
+  it('rejects empty replacements and leaves an identical stored value untouched', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    await writeCredentials(path, 'DSH_CRED_TEST: stored\n')
+    const ctx = await boot({ path, watch: false })
+    const seen = updates(ctx)
+
+    await expect(ctx.credentials.modify(KEY, () => Promise.resolve(''))).rejects.toThrow(/empty value/)
+    await expect(ctx.credentials.modify(KEY, current => Promise.resolve(current))).resolves.toBe('stored')
+    expect(seen).toEqual([])
+    expect(await readFile(path, 'utf8')).toBe('DSH_CRED_TEST: stored\n')
+  })
+
+  it('promotes a dotenv fallback only when a mutation returns a replacement', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    const ctx = new Context()
+    ctx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, createLaunchEnvironmentSnapshot([
+      { source: 'process', values: {} },
+      { source: 'project-env', path: '/work/.env', values: { DSH_CRED_TEST: 'fallback' } },
+    ]))
+    const fiber = ctx.plugin(LocalCredentialProvider, { path, watch: false })
+    cleanups.push(async () => { await fiber.dispose() })
+    await fiber
+
+    await expect(ctx.credentials.modify(KEY, () => Promise.resolve(undefined))).resolves.toBe('fallback')
+    await expect(readFile(path, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(ctx.credentials.modify(KEY, current => Promise.resolve(`${current}-stored`)))
+      .resolves.toBe('fallback-stored')
+    expect(await readFile(path, 'utf8')).toBe('DSH_CRED_TEST: fallback-stored\n')
   })
 
   it('leaves an empty mapping after unsetting the only entry', async () => {
@@ -392,6 +444,30 @@ describe('document writes', () => {
     const service = ctx.credentials
     await fiber.dispose()
     await expect(service.set(KEY, 'late')).rejects.toThrow(/disposed/)
+    await expect(service.modify(KEY, () => Promise.resolve('late'))).rejects.toThrow(/disposed/)
+  })
+
+  it('refuses a queued modification when disposal starts first', async () => {
+    const dir = await tempDir()
+    const ctx = new Context()
+    const fiber = ctx.plugin(LocalCredentialProvider, { path: join(dir, '.credentials.yaml'), watch: false })
+    await fiber
+    const service = ctx.credentials
+    const entered = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    const first = service.modify(KEY, async () => {
+      entered.resolve(undefined)
+      await release.promise
+      return 'first'
+    })
+    await entered.promise
+    const queued = service.modify(OTHER, () => Promise.resolve('second'))
+    const disposal = fiber.dispose()
+    release.resolve(undefined)
+
+    await expect(first).resolves.toBe('first')
+    await expect(queued).rejects.toThrow(/disposed before the queued/)
+    await disposal
   })
 })
 

@@ -7,11 +7,11 @@ File-backed [credentials](../credentials/README.md) provider: four layers, one h
 | Layer | Source id | Writable | Wins |
 |---|---|---|---|
 | Inherited process environment | `env` | no | always |
-| `$DSH_HOME/.credentials.yaml` document | `file` | yes (`set`/`unset`) | over both `.env` layers |
+| `$DSH_HOME/.credentials.yaml` document | `file` | yes (`set`/`modify`/`unset`) | over both `.env` layers |
 | `<invocation cwd>/.env` | `project-env` | not here | over the user `.env` |
 | `$DSH_HOME/.env` | `user-env` | not here | otherwise |
 
-The launching environment wins because a per-run override (`DEEPSEEK_API_KEY=… dsh`, a CI secret, a container `-e`) is operator intent for this run — and because it cannot be edited from inside, it must be *visibly* read-only: `describe()` reports `source: 'env', writable: false`, and `set`/`unset` reject instead of writing a change the reader would never see.
+The launching environment wins because a per-run override (`DEEPSEEK_API_KEY=… dsh`, a CI secret, a container `-e`) is operator intent for this run — and because it cannot be edited from inside, it must be *visibly* read-only: `describe()` reports `source: 'env', writable: false`, and `set`/`modify`/`unset` reject instead of writing a change the reader would never see.
 
 Everything below it loses to the managed store, so a key written by the Models page takes effect immediately even when an older key sits in a `.env`. Those two layers still resolve when nothing is stored, and `describe()` names them `project-env` or `user-env` with `writable: true` — storing a key replaces them as the effective source.
 
@@ -37,7 +37,7 @@ OPENAI_API_KEY: sk-…
 
 The document holds credentials only, so every deviation is a rejection rather than a skipped entry — a silently ignored key would read as "the secret I stored has no effect". A non-mapping root, a key that is not a POSIX identifier, a non-string value, an empty string, a duplicate key, and malformed YAML all fail: loud at boot, and warn-and-keep-the-last-good-snapshot on a live reload. There is no `version` field and no wrapper level; the format is the mapping.
 
-Writes patch the parsed document rather than rebuilding it, so comments and the formatting of every untouched entry survive. A comment directly above an entry is that entry's annotation and is removed with it. Every write first re-reads the document under the cross-process writer lock of [`dsh-atomic-write`](../../util/atomic-write/README.md) and publishes anything it had not observed, then commits atomically with mode `0600` under an owner-only (`0700`) directory — so a concurrent writer or an external edit inside the watcher's debounce window is folded in rather than overwritten. An on-disk document that no longer parses fails the write instead of overwriting content the provider could not understand.
+Writes patch the parsed document rather than rebuilding it, so comments and the formatting of every untouched entry survive. A comment directly above an entry is that entry's annotation and is removed with it. Every write first re-reads the document under the cross-process writer lock of [`dsh-atomic-write`](../../util/atomic-write/README.md) and publishes anything it had not observed, then commits atomically with mode `0600` under an owner-only (`0700`) directory — so a concurrent writer or an external edit inside the watcher's debounce window is folded in rather than overwritten. `modify` keeps that lock while its asynchronous callback reads and replaces one value, which is the exclusion needed for OAuth refresh-token rotation across processes. An on-disk document that no longer parses fails the write instead of overwriting content the provider could not understand.
 
 Any string value round-trips, multi-line values included, so no entry is unwritable for want of a quoting style. An empty stored value is absent, per the seam rule — which is why an empty string in the document is rejected outright: `unset` removes a key, it does not blank it.
 
@@ -65,7 +65,7 @@ No direct invalidation; credentials never enter a request prefix.
 
 ## Known Limitations and Deferred Work
 
-- **Same-reference concurrent writes are last-write-wins** — the writer lock and the read-modify-write keep concurrent writers from dropping each other's entries, but two writers editing one reference still resolve to the later write; there is no revision check.
+- **Direct same-reference writes are last-write-wins** — the writer lock keeps concurrent writers from dropping each other's entries, and `modify` serializes value-dependent replacement, but two independent `set` calls on one reference still resolve to the later write; there is no revision check.
 - **A same-UID process can read the document** — see [Security boundary](#security-boundary): the file-effect sandbox modes do not deny reads, and an OS-keychain provider is deferred.
 - **Environment changes are invisible** — the snapshot is frozen at launch, so a variable exported after startup reaches neither resolution nor `describe`; changing an environment-sourced credential takes a restart.
 - **Atomic, not crash-durable** — inherited from `dsh-atomic-write`; the store re-reads on boot.

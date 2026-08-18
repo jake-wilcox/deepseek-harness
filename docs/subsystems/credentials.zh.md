@@ -45,6 +45,10 @@ interface CredentialInfo {
 }
 ```
 
+## 串行替换
+
+`modify(ref, update)` 在提供方写互斥下运行依赖当前值的替换。回调收到确切的当前值，并返回新的非空值；返回 `undefined` 表示保留当前值。提供方将 `modify` 与 `set`、`unset` 串行化；本地文件提供方还会在整个异步回调期间持有跨进程写锁。OAuth 消费方用该操作保证跨请求、跨进程的 refresh token 轮换原子性。删除仍使用显式的 `unset` 操作。
+
 ## 已提交的变更
 
 `credentials/updated (ref)` 在提供方管理的来源发生已提交变更后发出——`set`、`unset` 或在存储中观察到的外部编辑。进程环境自身的变化不可观测，永不发出事件。消费方不需要该事件（它们按操作重新解析）；它服务于配置界面刷新「已配置」徽标。
@@ -61,7 +65,7 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 
 ### `ctx.credentials` — `CredentialProvider` (abstract seam)
 
-Abstract credential service. Providers implement the four operations over their source layers; one seam-wide rule binds them all: an empty stored value is absent everywhere — `resolve` skips it, `describe` reports it unconfigured — so a blank never masquerades as a configured secret.
+Abstract credential service. Providers implement the five operations over their source layers; one seam-wide rule binds them all: an empty stored value is absent everywhere — `resolve` skips it, `describe` reports it unconfigured — so a blank never masquerades as a configured secret.
 
 ```ts cordis-catalog
 /**
@@ -81,6 +85,23 @@ abstract resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined>
  * @returns configured state, supplying source, and writability.
  */
 abstract describe(ref: CredentialRef): Promise<CredentialInfo>
+
+/**
+ * Atomically inspect and optionally replace one value. Providers serialize
+ * the callback with every write for the same backing source; file-backed
+ * providers also hold their cross-process writer lock while it runs. The
+ * callback returns `undefined` to keep the current value unchanged. It
+ * cannot delete a value; use {@link unset} for an explicit removal.
+ *
+ * This operation exists for rotating credentials whose replacement depends
+ * on the exact current value, such as an OAuth refresh token. Holding the
+ * callback under the provider's write exclusion prevents two processes from
+ * exchanging the same single-use token concurrently.
+ * @param ref - the reference to inspect and possibly replace.
+ * @param update - serialized read-modify-write callback.
+ * @returns the effective value after the operation, or `undefined` while absent.
+ */
+abstract modify( ref: CredentialRef, update: (current: string | undefined) => Promise<string | undefined>, ): Promise<string | undefined>
 
 /**
  * Durably store one value in the provider-managed writable source. Rejects

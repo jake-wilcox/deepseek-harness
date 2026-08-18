@@ -505,7 +505,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   {
     key: 'credentials',
     summary: 'Abstract credential service.',
-    description: 'Abstract credential service. Providers implement the four operations over their source layers; one seam-wide rule binds them all: an empty stored value is absent everywhere — `resolve` skips it, `describe` reports it unconfigured — so a blank never masquerades as a configured secret.',
+    description: 'Abstract credential service. Providers implement the five operations over their source layers; one seam-wide rule binds them all: an empty stored value is absent everywhere — `resolve` skips it, `describe` reports it unconfigured — so a blank never masquerades as a configured secret.',
     methods: [
       {
         signature: 'abstract resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined>',
@@ -518,6 +518,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Describe one reference for configuration surfaces without exposing the value.',
         parameters: [{ name: 'ref', description: 'the reference to describe.' }],
         returns: 'configured state, supplying source, and writability.',
+      },
+      {
+        signature: 'abstract modify( ref: CredentialRef, update: (current: string | undefined) => Promise<string | undefined>, ): Promise<string | undefined>',
+        description: 'Atomically inspect and optionally replace one value. Providers serialize the callback with every write for the same backing source; file-backed providers also hold their cross-process writer lock while it runs. The callback returns `undefined` to keep the current value unchanged. It cannot delete a value; use unset for an explicit removal.\n\nThis operation exists for rotating credentials whose replacement depends on the exact current value, such as an OAuth refresh token. Holding the callback under the provider\'s write exclusion prevents two processes from exchanging the same single-use token concurrently.',
+        parameters: [{ name: 'ref', description: 'the reference to inspect and possibly replace.' }, { name: 'update', description: 'serialized read-modify-write callback.' }],
+        returns: 'the effective value after the operation, or `undefined` while absent.',
       },
       {
         signature: 'abstract set(ref: CredentialRef, value: string): Promise<void>',

@@ -8,6 +8,7 @@ import type { CredentialInfo, CredentialRef, ResolvedCredential } from '../src/i
  */
 export class MemoryCredentials extends CredentialProvider {
   private readonly store = new Map<string, string>()
+  private readonly chains = new Map<string, Promise<void>>()
 
   constructor(ctx: Context, seed: Record<string, string> = {}) {
     super(ctx)
@@ -31,19 +32,46 @@ export class MemoryCredentials extends CredentialProvider {
     })
   }
 
+  override modify(
+    ref: CredentialRef,
+    update: (current: string | undefined) => Promise<string | undefined>,
+  ): Promise<string | undefined> {
+    return this.enqueue(ref, async () => {
+      const current = this.store.get(ref)
+      const next = await update(current)
+      if (next === undefined) return current
+      if (next.length === 0) throw new Error('memory credentials: an empty value cannot be stored; use unset')
+      if (next !== current) {
+        this.store.set(ref, next)
+        this.ctx.emit('credentials/updated', ref)
+      }
+      return next
+    })
+  }
+
   override set(ref: CredentialRef, value: string): Promise<void> {
     if (value.length === 0) {
       return Promise.reject(new Error('memory credentials: an empty value cannot be stored; use unset'))
     }
-    this.store.set(ref, value)
-    this.ctx.emit('credentials/updated', ref)
-    return Promise.resolve()
+    return this.enqueue(ref, () => {
+      if (this.store.get(ref) !== value) {
+        this.store.set(ref, value)
+        this.ctx.emit('credentials/updated', ref)
+      }
+    })
   }
 
   override unset(ref: CredentialRef): Promise<void> {
-    if (this.store.delete(ref)) {
-      this.ctx.emit('credentials/updated', ref)
-    }
-    return Promise.resolve()
+    return this.enqueue(ref, () => {
+      if (this.store.delete(ref)) this.ctx.emit('credentials/updated', ref)
+    })
+  }
+
+  /** Serialize one operation for a reference without poisoning later work. */
+  private enqueue<T>(ref: CredentialRef, operation: () => Promise<T> | T): Promise<T> {
+    const previous = this.chains.get(ref) ?? Promise.resolve()
+    const task = previous.then(operation)
+    this.chains.set(ref, task.then(() => undefined, () => undefined))
+    return task
   }
 }

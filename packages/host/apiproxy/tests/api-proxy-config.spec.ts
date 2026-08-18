@@ -110,6 +110,19 @@ class MemoryCredentials extends CredentialProvider {
     return Promise.resolve({ configured, ...configured ? { source: 'file' } : {}, writable: true })
   }
 
+  modify(
+    ref: CredentialRef,
+    update: (current: string | undefined) => Promise<string | undefined>,
+  ): Promise<string | undefined> {
+    if (this.shadowed.has(ref)) {
+      return Promise.reject(new Error(`credentials: ${ref} is shadowed by the read-only environment`))
+    }
+    return update(this.values.get(ref)).then((next) => {
+      if (next !== undefined) this.values.set(ref, next)
+      return next ?? this.values.get(ref)
+    })
+  }
+
   set(ref: CredentialRef, value: string): Promise<void> {
     if (this.shadowed.has(ref)) {
       return Promise.reject(new Error(`credentials: ${ref} is shadowed by the read-only environment`))

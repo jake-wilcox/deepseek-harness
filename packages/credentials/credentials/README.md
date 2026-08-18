@@ -25,9 +25,11 @@ await ctx.credentials.set(ref, 'sk-…')                   // rejects while a re
 await ctx.credentials.unset(ref)                         // no-op when absent; same shadowing rule
 ```
 
-`credentials/updated (ref)` fires after a committed change to a provider-managed source — a `set`, an `unset`, or an external edit observed in storage. Ambient process-environment changes are not observable and never emit. Consumers do not need the event (they re-resolve per operation); it exists for configuration UIs refreshing a "configured" badge. Its declaration lives in the client-safe `./types` subpath export together with the `CredentialRef` type it names (the package root re-exports the type), so a consumer outside the Host compilation face reads the very signature the Host emits instead of restating it.
+`modify(ref, update)` is the serialized read-modify-write operation for secrets such as rotating OAuth credentials. The callback sees the exact current value and returns its replacement; `undefined` retains that value. Providers serialize it with `set` and `unset`, and durable providers hold their cross-process writer lock for the callback, so two processes cannot refresh the same single-use token concurrently. Use `unset` for deletion.
 
-The shadowing rule on `set`/`unset` is deliberate fail-loud: when a read-only source (the live process environment, in the local provider) currently supplies the reference, a write would appear to succeed while resolution keeps returning the shadowing value — the seam rejects instead, and `describe().writable` lets a UI render the reference read-only up front.
+`credentials/updated (ref)` fires after a committed change to a provider-managed source — a `set`, an `unset`, a replacement from `modify`, or an external edit observed in storage. Ambient process-environment changes are not observable and never emit. Consumers do not need the event (they re-resolve per operation); it exists for configuration UIs refreshing a "configured" badge. Its declaration lives in the client-safe `./types` subpath export together with the `CredentialRef` type it names (the package root re-exports the type), so a consumer outside the Host compilation face reads the very signature the Host emits instead of restating it.
+
+The shadowing rule on `set`/`modify`/`unset` is deliberate fail-loud: when a read-only source (the live process environment, in the local provider) currently supplies the reference, a write would appear to succeed while resolution keeps returning the shadowing value — the seam rejects instead, and `describe().writable` lets a UI render the reference read-only up front.
 
 ## Providers
 

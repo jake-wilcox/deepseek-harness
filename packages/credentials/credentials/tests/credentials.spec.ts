@@ -61,6 +61,43 @@ describe('the credentials seam through the memory provider', () => {
     expect(events).toEqual([])
   })
 
+  it('serializes read-modify-write and keeps undefined as no change', async () => {
+    const ctx = await boot({ DEEPSEEK_API_KEY: '0' })
+    const release = Promise.withResolvers<undefined>()
+    const first = ctx.credentials.modify(REF, async (current) => {
+      await release.promise
+      return `${current ?? ''}1`
+    })
+    const second = ctx.credentials.modify(REF, current => Promise.resolve(`${current ?? ''}2`))
+
+    release.resolve(undefined)
+    await expect(first).resolves.toBe('01')
+    await expect(second).resolves.toBe('012')
+    await expect(ctx.credentials.modify(REF, () => Promise.resolve(undefined))).resolves.toBe('012')
+    expect(await ctx.credentials.resolve(REF)).toEqual({ value: '012', source: 'memory' })
+  })
+
+  it('serializes direct writes with an in-flight modification', async () => {
+    const ctx = await boot({ DEEPSEEK_API_KEY: 'old' })
+    const release = Promise.withResolvers<undefined>()
+    const modifying = ctx.credentials.modify(REF, async (current) => {
+      await release.promise
+      return `${current ?? ''}-refreshed`
+    })
+    const setting = ctx.credentials.set(REF, 'manual')
+
+    release.resolve(undefined)
+    await expect(modifying).resolves.toBe('old-refreshed')
+    await setting
+    expect(await ctx.credentials.resolve(REF)).toEqual({ value: 'manual', source: 'memory' })
+  })
+
+  it('rejects an empty replacement without poisoning the mutation chain', async () => {
+    const ctx = await boot({ DEEPSEEK_API_KEY: 'old' })
+    await expect(ctx.credentials.modify(REF, () => Promise.resolve(''))).rejects.toThrow(/empty value/)
+    await expect(ctx.credentials.modify(REF, () => Promise.resolve('new'))).resolves.toBe('new')
+  })
+
   it('removes the service with its fiber', async () => {
     const ctx = new Context()
     const fiber = await ctx.plugin(MemoryCredentials)

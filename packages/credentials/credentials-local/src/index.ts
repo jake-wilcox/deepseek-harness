@@ -330,6 +330,40 @@ export class LocalCredentialProvider extends CredentialProvider {
     return Promise.resolve({ configured: false, writable: true })
   }
 
+  override async modify(
+    ref: CredentialRef,
+    update: (current: string | undefined) => Promise<string | undefined>,
+  ): Promise<string | undefined> {
+    if (this.isClosed()) {
+      throw new Error(`credentials-local is disposed: cannot modify "${ref}"`)
+    }
+    this.assertUnshadowed(ref, 'modify')
+    return this.enqueue(async () => {
+      if (this.isClosed()) {
+        throw new Error(`credentials-local was disposed before the queued "${ref}" modify ran`)
+      }
+      this.assertUnshadowed(ref, 'modify')
+      await mkdir(dirname(this.spec.filename), { recursive: true, mode: 0o700 })
+      return withFileLock(this.spec.filename, async () => {
+        await this.reconcileFromDisk()
+        const stored = this.values.get(ref)
+        const current = stored ?? this.dotenvFallback(ref)?.value
+        const next = await update(current)
+        if (next === undefined) return current
+        if (next.length === 0) {
+          throw new Error(`credentials-local: an empty value cannot be stored for "${ref}"; use unset`)
+        }
+        if (next === stored) return next
+        const nextText = renderDocument(this.text, ref, next)
+        await writeFileAtomic(this.spec.filename, nextText, { mode: 0o600, dirMode: 0o700 })
+        this.text = nextText
+        this.values.set(ref, next)
+        this.notifyUpdated(ref)
+        return next
+      })
+    })
+  }
+
   override async set(ref: CredentialRef, value: string): Promise<void> {
     if (value.length === 0) {
       throw new Error(`credentials-local: an empty value cannot be stored for "${ref}"; use unset`)
@@ -407,7 +441,7 @@ export class LocalCredentialProvider extends CredentialProvider {
    * no-effect. Only that layer can shadow a write: everything else this
    * provider resolves ranks below the document being written.
    */
-  private assertUnshadowed(ref: CredentialRef, verb: 'set' | 'unset'): void {
+  private assertUnshadowed(ref: CredentialRef, verb: 'set' | 'unset' | 'modify'): void {
     if (this.inherited(ref) !== undefined) {
       throw new Error(
         `credentials-local: "${ref}" is supplied read-only by the launching environment, so ${verb} would be`
