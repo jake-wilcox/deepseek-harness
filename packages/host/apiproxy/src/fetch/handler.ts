@@ -69,6 +69,7 @@ import {
   llmLogoutProviderRequestSchema,
   llmModelsRequestSchema,
   llmProviderLoginAttemptRequestSchema,
+  llmProviderUsageRequestSchema,
   llmProvidersRequestSchema,
   llmStartProviderLoginRequestSchema,
 } from '../api/llm.schema.ts'
@@ -152,6 +153,7 @@ const UNARY_ROUTES: UnaryRoutes = {
   'llm.providerLoginAttempt': { schema: llmProviderLoginAttemptRequestSchema, invoke: (api, r) => api.llm.providerLoginAttempt(r) },
   'llm.cancelProviderLogin': { schema: llmCancelProviderLoginRequestSchema, invoke: (api, r) => api.llm.cancelProviderLogin(r) },
   'llm.logoutProvider': { schema: llmLogoutProviderRequestSchema, invoke: (api, r) => api.llm.logoutProvider(r) },
+  'llm.providerUsage': { schema: llmProviderUsageRequestSchema, invoke: (api, r, signal) => api.llm.providerUsage(r, signal) },
 }
 
 /** Route lookup that narrows an arbitrary path segment to a map key (single cast point for the string→key refinement). */

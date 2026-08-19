@@ -250,6 +250,10 @@
     - id: ui-model-selection
       name: '@deepseek-ai/dsh-client-ui-model-selection'
 
+    # Provider-account allowance inside the ContextMeter popover.
+    - id: ui-provider-usage
+      name: '@deepseek-ai/dsh-client-ui-provider-usage'
+
     - id: ui-permission
       name: '@deepseek-ai/dsh-client-ui-permission-presets'
 

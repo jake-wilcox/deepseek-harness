@@ -33,11 +33,13 @@ const ROWS = [
 
 export interface ContextMeterProps {
   useProjection: UseProjection
+  /** The owning bar's authorized child-slot renderer. */
+  renderSlot: ComposerBarProps['renderSlot']
   /** The owning bar's locale seat, passed down as a plain prop. */
   t: ComposerBarProps['t']
 }
 
-export function ContextMeter({ useProjection, t }: ContextMeterProps) {
+export function ContextMeter({ useProjection, renderSlot, t }: ContextMeterProps) {
   const pressure = useProjection('contextPressure')
   const breakdown = useProjection('contextBreakdown')
   const [open, setOpen] = useState(false)
@@ -146,6 +148,7 @@ export function ContextMeter({ useProjection, t }: ContextMeterProps) {
               ))}
             </dl>
           )}
+          {renderSlot('conversation.composer.contextMeter.usage', {})}
         </div>
       )}
     </span>

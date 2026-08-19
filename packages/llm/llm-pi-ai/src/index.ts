@@ -238,7 +238,10 @@ export function apply(ctx: Context, config: Config): void {
     const store = new HarnessCredentialStore(credentialCtx.credentials, catalogProviderIds())
     credentialStore = store
     ensureDirectory()
-    credentialCtx.llm.registerProviderAuthentication('openai-codex', openAiCodexAuthentication(store))
+    credentialCtx.llm.registerProviderAuthentication(
+      'openai-codex',
+      openAiCodexAuthentication(store, () => profiles().get('openai-codex')?.baseURL),
+    )
     credentialCtx.effect(() => () => {
       /* v8 ignore next -- a stale optional-service disposer cannot clear a replacement */
       if (credentialStore !== store) return

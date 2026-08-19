@@ -2,7 +2,7 @@
 // ContextMeter (composer trailing control): occupancy ring gating, the
 // click-open breakdown panel, and its close gestures.
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render } from '@testing-library/react'
 import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import { en as commonEn, zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/index.ts'
@@ -15,6 +15,7 @@ afterEach(cleanup)
 // Mirrors the real lookup chain (conversation namespace, then common).
 const t = makeTranslate(zh, commonZh) as ContextMeterProps['t']
 const tEn = makeTranslate(en, commonEn) as ContextMeterProps['t']
+const renderSlot = (() => null) as ContextMeterProps['renderSlot']
 
 const BREAKDOWN = { systemTokens: 120, toolsTokens: 21_500, messageTokens: 477_000 }
 
@@ -27,7 +28,7 @@ function projections(values: Record<string, unknown>): ContextMeterProps['usePro
 }
 
 function meter(values: Record<string, unknown>, translate: ContextMeterProps['t'] = t) {
-  return render(<ContextMeter useProjection={projections(values)} t={translate} />)
+  return render(<ContextMeter useProjection={projections(values)} renderSlot={renderSlot} t={translate} />)
 }
 
 describe('ContextMeter', () => {
@@ -57,6 +58,21 @@ describe('ContextMeter', () => {
     // Clicking the trigger again toggles the panel shut.
     fireEvent.click(trigger)
     expect(view.container.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('mounts the provider-usage child only inside the open dialog', () => {
+    const usageSlot = vi.fn(() => <span>Subscription fixture</span>) as ContextMeterProps['renderSlot']
+    const view = render(<ContextMeter
+      useProjection={projections({ contextPressure: { pressureTokens: 32_000, contextWindow: 128_000 } })}
+      renderSlot={usageSlot}
+      t={t}
+    />)
+    expect(usageSlot).not.toHaveBeenCalled()
+    fireEvent.click(view.getByRole('button', { name: '上下文已用 25%' }))
+    expect(usageSlot).toHaveBeenCalledWith('conversation.composer.contextMeter.usage', {})
+    expect(view.getByText('Subscription fixture')).toBeDefined()
+    fireEvent.click(view.getByRole('button', { name: '上下文已用 25%' }))
+    expect(view.queryByText('Subscription fixture')).toBeNull()
   })
 
   it('lets each locale own the headline word order around the reading', () => {
@@ -117,19 +133,19 @@ describe('ContextMeter', () => {
       contextPressure: { pressureTokens: 32_000, contextWindow: 128_000 },
       contextBreakdown: BREAKDOWN,
     }
-    const view = render(<ContextMeter useProjection={(key: string) => values[key]} t={t} />)
+    const view = render(<ContextMeter useProjection={(key: string) => values[key]} renderSlot={renderSlot} t={t} />)
     fireEvent.click(view.getByRole('button', { name: '上下文已用 25%' }))
     expect(view.container.querySelector('[role="dialog"]')).not.toBeNull()
 
     values = { contextPressure: { pressureTokens: 32_000 }, contextBreakdown: BREAKDOWN }
-    view.rerender(<ContextMeter useProjection={(key: string) => values[key]} t={t} />)
+    view.rerender(<ContextMeter useProjection={(key: string) => values[key]} renderSlot={renderSlot} t={t} />)
     expect(view.container.textContent).toBe('')
 
     values = {
       contextPressure: { pressureTokens: 32_000, contextWindow: 128_000 },
       contextBreakdown: BREAKDOWN,
     }
-    view.rerender(<ContextMeter useProjection={(key: string) => values[key]} t={t} />)
+    view.rerender(<ContextMeter useProjection={(key: string) => values[key]} renderSlot={renderSlot} t={t} />)
     expect(view.getByRole('button', { name: '上下文已用 25%' }).getAttribute('aria-expanded')).toBe('false')
     expect(view.container.querySelector('[role="dialog"]')).toBeNull()
   })

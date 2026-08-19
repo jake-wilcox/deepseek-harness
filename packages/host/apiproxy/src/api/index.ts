@@ -68,6 +68,8 @@ export type {
   ProviderAuthMethodView,
   ProviderAuthNotificationView,
   ProviderLoginAttemptView,
+  ProviderUsageView,
+  ProviderUsageWindowView,
 } from './llm.ts'
 export type { DownloadsApi } from './downloads.ts'
 export type { ApprovalResponsePayload } from './approvals.ts'

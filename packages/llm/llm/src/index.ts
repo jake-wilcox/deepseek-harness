@@ -19,6 +19,7 @@ import type {
   LlmProviderAuthenticationView,
   LlmProviderAuthNotification,
   LlmProviderLoginAttempt,
+  LlmProviderUsageSnapshot,
   LlmResolvedModelInfo,
   LlmProviderInfo,
   ModelModality,
@@ -285,7 +286,14 @@ export interface DirectoryRegistrationHandle {
 interface ProviderAuthenticationRegistration {
   definition: LlmProviderAuthentication
   methods: ReadonlySet<string>
+  usages: Set<ProviderUsageRecord>
+  retiring: boolean
   attempt?: ProviderLoginAttemptRecord
+}
+
+interface ProviderUsageRecord {
+  abort: AbortController
+  done: Promise<void>
 }
 
 interface ProviderLoginAttemptRecord {
@@ -371,7 +379,7 @@ export class LlmRuntime extends Service {
 
   /**
    * Register the interactive authentication implementation for one provider.
-   * The registration is fiber-scoped; disposal cancels its active attempt.
+   * The registration is fiber-scoped; disposal cancels its active login attempt and usage queries.
    * @param provider - non-empty provider route.
    * @param definition - methods, status query, login, and logout implementation.
    * @returns the fire-and-forget disposer.
@@ -398,13 +406,21 @@ export class LlmRuntime extends Service {
       return { ...method }
     })
     const detached: LlmProviderAuthentication = { ...definition, methods }
-    const registration: ProviderAuthenticationRegistration = { definition: detached, methods: methodIds }
+    const registration: ProviderAuthenticationRegistration = {
+      definition: detached,
+      methods: methodIds,
+      usages: new Set(),
+      retiring: false,
+    }
     const dispose = this.ctx.effect(function* (this: LlmRuntime) {
       this.authentications.set(provider, registration)
       this.emitAuthUpdated(provider)
       yield async () => {
+        registration.retiring = true
         registration.attempt?.abort.abort()
+        for (const usage of registration.usages) usage.abort.abort()
         await registration.attempt?.done
+        await Promise.all([...registration.usages].map(usage => usage.done))
         this.authentications.delete(provider)
         this.emitAuthUpdated(provider)
       }
@@ -430,6 +446,7 @@ export class LlmRuntime extends Service {
         provider,
         methods: registration.definition.methods.map(method => ({ ...method })),
         authenticated: false,
+        usageSupported: registration.definition.usage !== undefined,
         error: 'Authentication status is unavailable.',
       }
     }
@@ -441,8 +458,65 @@ export class LlmRuntime extends Service {
       provider,
       methods: registration.definition.methods.map(method => ({ ...method })),
       authenticated: status.authenticated,
+      usageSupported: registration.definition.usage !== undefined,
       ...status.source === undefined ? {} : { source: status.source },
     }
+  }
+
+  /**
+   * Read current non-secret account usage for one provider.
+   * @param provider - provider route to inspect.
+   * @param signal - optional cancellation for the provider request.
+   * @returns a detached snapshot, or `undefined` when no usage operation is currently registered.
+   * @throws {LlmError} `INVALID_PROVIDER_USAGE` when the provider violates the snapshot obligations; provider failures propagate.
+   */
+  async providerUsage(provider: string, signal?: AbortSignal): Promise<LlmProviderUsageSnapshot | undefined> {
+    const registration = this.authentications.get(provider)
+    if (registration?.definition.usage === undefined || registration.retiring) return undefined
+    const abort = new AbortController()
+    const forwardAbort = (): void => { abort.abort(signal?.reason) }
+    if (signal?.aborted) forwardAbort()
+    else signal?.addEventListener('abort', forwardAbort, { once: true })
+    const request = registration.definition.usage(abort.signal)
+    const record: ProviderUsageRecord = {
+      abort,
+      done: request.then(() => {}, () => {}),
+    }
+    registration.usages.add(record)
+    let snapshot: LlmProviderUsageSnapshot
+    try {
+      snapshot = await request
+      if (abort.signal.aborted) {
+        throw new LlmError(`provider usage for "${provider}" was cancelled`, 'ABORTED')
+      }
+    } finally {
+      signal?.removeEventListener('abort', forwardAbort)
+      registration.usages.delete(record)
+    }
+    const invalid = (): LlmError => new LlmError(
+      `provider usage for "${provider}" returned an invalid snapshot`,
+      'INVALID_PROVIDER_USAGE',
+    )
+    if (!Number.isSafeInteger(snapshot.capturedAtMs) || snapshot.capturedAtMs < 0
+      || !Array.isArray(snapshot.windows) || snapshot.windows.length === 0) {
+      throw invalid()
+    }
+    const ids = new Set<string>()
+    const windows = snapshot.windows.map((window) => {
+      if (typeof window.id !== 'string' || window.id.length === 0 || ids.has(window.id)
+        || typeof window.usedPercent !== 'number' || !Number.isFinite(window.usedPercent)
+        || window.usedPercent < 0 || window.usedPercent > 100
+        || (window.durationMinutes !== undefined
+          && (typeof window.durationMinutes !== 'number' || !Number.isFinite(window.durationMinutes)
+            || window.durationMinutes <= 0))
+        || (window.resetsAtMs !== undefined
+          && (!Number.isSafeInteger(window.resetsAtMs) || window.resetsAtMs < 0))) {
+        throw invalid()
+      }
+      ids.add(window.id)
+      return { ...window }
+    })
+    return { capturedAtMs: snapshot.capturedAtMs, windows }
   }
 
   /**

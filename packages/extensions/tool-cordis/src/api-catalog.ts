@@ -802,7 +802,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     methods: [
       {
         signature: 'registerProviderAuthentication(provider: string, definition: LlmProviderAuthentication): () => void',
-        description: 'Register the interactive authentication implementation for one provider. The registration is fiber-scoped; disposal cancels its active attempt.',
+        description: 'Register the interactive authentication implementation for one provider. The registration is fiber-scoped; disposal cancels its active login attempt and usage queries.',
         parameters: [{ name: 'provider', description: 'non-empty provider route.' }, { name: 'definition', description: 'methods, status query, login, and logout implementation.' }],
         returns: 'the fire-and-forget disposer.',
       },
@@ -811,6 +811,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Read one provider\'s current non-secret authentication view.',
         parameters: [{ name: 'provider', description: 'provider route to inspect.' }],
         returns: 'the detached view, or `undefined` when no implementation is registered.',
+      },
+      {
+        signature: 'async providerUsage(provider: string, signal?: AbortSignal): Promise<LlmProviderUsageSnapshot | undefined>',
+        description: 'Read current non-secret account usage for one provider.',
+        parameters: [{ name: 'provider', description: 'provider route to inspect.' }, { name: 'signal', description: 'optional cancellation for the provider request.' }],
+        returns: 'a detached snapshot, or `undefined` when no usage operation is currently registered.',
+        throws: ['{LlmError} `INVALID_PROVIDER_USAGE` when the provider violates the snapshot obligations; provider failures propagate.'],
       },
       {
         signature: 'startProviderLogin(provider: string, method: string): LlmProviderLoginAttempt',
@@ -3358,11 +3365,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'LlmProviderAuthentication',
-    declaration: 'export interface LlmProviderAuthentication {\n    methods: readonly LlmProviderAuthMethod[];\n    status(): Promise<LlmProviderAuthStatus>;\n    login(method: string, interaction: LlmProviderAuthInteraction): Promise<void>;\n    logout(): Promise<void>;\n}',
+    declaration: 'export interface LlmProviderAuthentication {\n    methods: readonly LlmProviderAuthMethod[];\n    status(): Promise<LlmProviderAuthStatus>;\n    login(method: string, interaction: LlmProviderAuthInteraction): Promise<void>;\n    logout(): Promise<void>;\n    usage?(signal?: AbortSignal): Promise<LlmProviderUsageSnapshot>;\n}',
   },
   {
     name: 'LlmProviderAuthenticationView',
-    declaration: 'export interface LlmProviderAuthenticationView extends LlmProviderAuthStatus {\n    provider: string;\n    methods: LlmProviderAuthMethod[];\n    error?: string;\n}',
+    declaration: 'export interface LlmProviderAuthenticationView extends LlmProviderAuthStatus {\n    provider: string;\n    methods: LlmProviderAuthMethod[];\n    usageSupported: boolean;\n    error?: string;\n}',
   },
   {
     name: 'LlmProviderAuthInteraction',
@@ -3389,6 +3396,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface LlmProviderLoginAttempt {\n    attemptId: ProviderLoginAttemptId;\n    provider: string;\n    method: string;\n    state: \'starting\' | \'waiting\' | \'succeeded\' | \'failed\' | \'cancelled\';\n    notification?: LlmProviderAuthNotification;\n    error?: string;\n}',
   },
   {
+    name: 'LlmProviderUsageSnapshot',
+    declaration: 'export interface LlmProviderUsageSnapshot {\n    capturedAtMs: number;\n    windows: LlmProviderUsageWindow[];\n}',
+  },
+  {
+    name: 'LlmProviderUsageWindow',
+    declaration: 'export interface LlmProviderUsageWindow {\n    id: string;\n    usedPercent: number;\n    durationMinutes?: number;\n    resetsAtMs?: number;\n}',
+  },
+  {
     name: 'LlmReasoningEffortInfo',
     declaration: 'export interface LlmReasoningEffortInfo {\n    id: ReasoningEffortId;\n    name: string;\n    description?: string;\n}',
   },
@@ -3398,7 +3413,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'LlmRuntime',
-    declaration: 'export class LlmRuntime extends Service {\n    constructor(ctx: Context);\n    registerProviderAuthentication(provider: string, definition: LlmProviderAuthentication): () => void;\n    async providerAuthentication(provider: string): Promise<LlmProviderAuthenticationView | undefined>;\n    startProviderLogin(provider: string, method: string): LlmProviderLoginAttempt;\n    providerLoginAttempt(provider: string, attemptId: ProviderLoginAttemptId): LlmProviderLoginAttempt;\n    async cancelProviderLogin(provider: string, attemptId: ProviderLoginAttemptId): Promise<LlmProviderLoginAttempt>;\n    async logoutProvider(provider: string): Promise<void>;\n    registerAdapter(providers: string[], adapter: LlmAdapter): AdapterRegistrationHandle;\n    listProviders(): LlmProviderInfo[];\n    registerConfigurableProviders(entries: readonly LlmConfigurableProvider[]): DirectoryRegistrationHandle;\n    listConfigurableProviders(): LlmConfigurableProvider[];\n    registerModelDiscovery(settingsNs: string, discover: (request: LlmModelDiscoveryRequest) => Promise<readonly LlmDiscoveredModel[]>): () => void;\n    async discoverModels(settingsNs: string, request: LlmModelDiscoveryRequest): Promise<LlmDiscoveredModel[]>;\n    providerRetryPolicy(provider: string): ResolvedRetryPolicy;\n    async listModels(provider: string): Promise<LlmModelInfo[]>;\n    async resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;\n    async resolveCallConfig(config: LlmCallConfig,  /* …truncated — full shape in source */',
+    declaration: 'export class LlmRuntime extends Service {\n    constructor(ctx: Context);\n    registerProviderAuthentication(provider: string, definition: LlmProviderAuthentication): () => void;\n    async providerAuthentication(provider: string): Promise<LlmProviderAuthenticationView | undefined>;\n    async providerUsage(provider: string, signal?: AbortSignal): Promise<LlmProviderUsageSnapshot | undefined>;\n    startProviderLogin(provider: string, method: string): LlmProviderLoginAttempt;\n    providerLoginAttempt(provider: string, attemptId: ProviderLoginAttemptId): LlmProviderLoginAttempt;\n    async cancelProviderLogin(provider: string, attemptId: ProviderLoginAttemptId): Promise<LlmProviderLoginAttempt>;\n    async logoutProvider(provider: string): Promise<void>;\n    registerAdapter(providers: string[], adapter: LlmAdapter): AdapterRegistrationHandle;\n    listProviders(): LlmProviderInfo[];\n    registerConfigurableProviders(entries: readonly LlmConfigurableProvider[]): DirectoryRegistrationHandle;\n    listConfigurableProviders(): LlmConfigurableProvider[];\n    registerModelDiscovery(settingsNs: string, discover: (request: LlmModelDiscoveryRequest) => Promise<readonly LlmDiscoveredModel[]>): () => void;\n    async discoverModels(settingsNs: string, request: LlmModelDiscoveryRequest): Promise<LlmDiscoveredModel[]>;\n    providerRetryPolicy(provider: string): ResolvedRetryPolicy;\n    async listModels(provider: string): Promise<LlmModelInfo[]>;\n    async resolveModelInfo(provider: string, model: s /* …truncated — full shape in source */',
   },
   {
     name: 'LspHover',

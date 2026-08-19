@@ -30,6 +30,7 @@ export type {
   SettingsApi, SettingsNamespaceView, SettingsPathOpView, SettingsSecretView,
   CredentialsApi, CredentialView, ConfigurableProviderView, DiscoveredModelView, LlmApi,
   ProviderAuthenticationView, ProviderAuthMethodView, ProviderAuthNotificationView, ProviderLoginAttemptView,
+  ProviderUsageView, ProviderUsageWindowView,
 } from './api.ts'
 export {
   RpcId,

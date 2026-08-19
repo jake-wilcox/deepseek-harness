@@ -114,6 +114,8 @@ profile 的 `models` 列表是*替换*该路由已安装 catalog，而不是扩�
 
 普通流式请求会直接使用这份存储，因此这是一个 harness 调用 OpenAI Codex 提供方，并不是在 DeepSeek Harness 内部运行 Codex SDK 或另一个 agent harness。pi-ai 会在提供方 I/O 之前检查过期状态，并在 `CredentialProvider.modify` 内刷新；本地提供方在整个交换期间持有跨进程写锁，防止两个 harness 进程花掉同一个轮换 refresh token。对于有意自行提供 token 的部署，`apiKeyEnv` 仍是显式覆盖。没有 `ctx.credentials` 时，不存在持久 OAuth 存储或登录注册，仅支持 OAuth 的 catalog 路由仍不会出现在可配置提供方目录中。
 
+同一项认证注册会按需报告 Codex 订阅额度。它先让 pi-ai 刷新由 Harness 持有的 OAuth 文档，再从刷新后的文档读取账户 id，并用这两个值调用账户用量端点。解析器只把主周期和次周期的已用百分比、周期长度与重置时间投影为 `LlmProviderUsageSnapshot`；套餐标签、credits、账户身份、token、标头与原始响应都保留在提供方内部。该查询不会调用已安装的 Codex CLI，不会读取 `~/.codex/auth.json`，也不会缓存结果或把用量追加到会话日志。
+
 适配器通过 `ctx.llm.listModels(provider)` 公开每条已配置路由的模型。这是从请求路径所用的同一个 pi-ai `Models` 集合读取的提供方无关 selector 元数据，因此发现不会创建第二个模型注册表。`ctx.llm.resolveModelInfo(provider, model)` 会执行一次精确 descriptor 查找，并返回其身份、上下文窗口、已配置输出上限和可选思考级别，让权威元数据保留在拥有路由的适配器上，而非消费方。模型**已配置**的 `maxTokens` 会成为 seam 的 `defaultMaxTokens`，因此未点名输出上限的请求会携带部署选定的那一个；而从已安装 catalog 继承来的值是模型的输出**能力**，绝不会自行变成请求默认值。
 
 携带推理元数据的模型——来自已安装 catalog，或来自其条目的 `reasoningEfforts`——会公开 pi-ai 有序的 `getSupportedThinkingLevels(model)` 结果，不经筛选或规范化，其中包括 `off`，以及模型对 `xhigh` 或 `max` 的特定支持。Harness 将每个规范 pi-ai 级别公开为不透明 ID；提供方／模型在协议格式中的表示仍保留在 pi-ai 的 `thinkingLevelMap` 中。

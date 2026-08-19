@@ -78,6 +78,7 @@ export interface RpcMethodMap {
   'llm.providerLoginAttempt': LlmApi['providerLoginAttempt']
   'llm.cancelProviderLogin': LlmApi['cancelProviderLogin']
   'llm.logoutProvider': LlmApi['logoutProvider']
+  'llm.providerUsage': LlmApi['providerUsage']
 }
 
 /** Business request payload of method K (reaches through the RpcRequest narrow form to payload). */

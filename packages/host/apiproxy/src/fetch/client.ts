@@ -66,6 +66,7 @@ import {
   llmLogoutProviderValueSchema,
   llmModelsValueSchema,
   llmProviderLoginAttemptValueSchema,
+  llmProviderUsageValueSchema,
   llmProvidersValueSchema,
   llmStartProviderLoginValueSchema,
 } from '../api/llm.schema.ts'
@@ -172,6 +173,7 @@ export interface IApiClient {
     providerLoginAttempt(payload: RequestPayload<'llm.providerLoginAttempt'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.providerLoginAttempt'>>>
     cancelProviderLogin(payload: RequestPayload<'llm.cancelProviderLogin'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.cancelProviderLogin'>>>
     logoutProvider(payload: RequestPayload<'llm.logoutProvider'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.logoutProvider'>>>
+    providerUsage(payload: RequestPayload<'llm.providerUsage'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.providerUsage'>>>
   }
   /** client-response passthrough (rpcId is a backfill of the server-request's id — never minted here). */
   respond(message: ClientResponse, signal?: AbortSignal): Promise<RpcReceipt>
@@ -238,6 +240,7 @@ const UNARY_VALUE_SCHEMAS: { [K in keyof RpcMethodMap]: z.ZodType<Wire<ResponseV
   'llm.providerLoginAttempt': llmProviderLoginAttemptValueSchema,
   'llm.cancelProviderLogin': llmCancelProviderLoginValueSchema,
   'llm.logoutProvider': llmLogoutProviderValueSchema,
+  'llm.providerUsage': llmProviderUsageValueSchema,
 }
 
 /** Default timeout for bounded unary calls (rpc-compare 2026-07-19: a hung host must not leave callers pending forever). */
@@ -518,6 +521,7 @@ export abstract class AbstractApiClient implements IApiClient {
     providerLoginAttempt: (payload, signal) => this.callUnary('llm.providerLoginAttempt', payload, signal),
     cancelProviderLogin: (payload, signal) => this.callUnary('llm.cancelProviderLogin', payload, signal),
     logoutProvider: (payload, signal) => this.callUnary('llm.logoutProvider', payload, signal),
+    providerUsage: (payload, signal) => this.callUnary('llm.providerUsage', payload, signal),
   }
 
   readonly events: IApiClient['events'] = {

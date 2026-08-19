@@ -3428,6 +3428,54 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           })
         }
       },
+
+      async providerUsage(request, signal) {
+        const { provider } = request.payload
+        if (signal?.aborted) {
+          return err(request, {
+            code: 'cancelled',
+            message: 'Provider usage request was cancelled.',
+            details: {},
+          })
+        }
+        try {
+          const usage = await ctx.llm.providerUsage(provider, signal)
+          if (signal?.aborted) {
+            return err(request, {
+              code: 'cancelled',
+              message: 'Provider usage request was cancelled.',
+              details: {},
+            })
+          }
+          if (usage === undefined) return ok(request, {})
+          return ok(request, {
+            usage: {
+              capturedAtMs: usage.capturedAtMs,
+              windows: usage.windows.map(window => ({
+                id: window.id,
+                usedPercent: window.usedPercent,
+                ...window.durationMinutes === undefined ? {} : { durationMinutes: window.durationMinutes },
+                ...window.resetsAtMs === undefined ? {} : { resetsAtMs: window.resetsAtMs },
+              })),
+            },
+          })
+        } catch (error: unknown) {
+          if (signal?.aborted) {
+            return err(request, {
+              code: 'cancelled',
+              message: 'Provider usage request was cancelled.',
+              details: {},
+            })
+          }
+          ctx.logger.warn('api-proxy: provider usage for "%s" failed', provider)
+          ctx.logger.warn(error)
+          return err(request, {
+            code: 'provider-usage-failed',
+            message: 'Account usage is unavailable.',
+            details: { provider },
+          })
+        }
+      },
     },
 
     events: {
@@ -3760,6 +3808,7 @@ function authenticationView(
     authentication: {
       authenticated: authentication.authenticated,
       methods: authentication.methods.map(method => ({ ...method })),
+      usageSupported: authentication.usageSupported,
       ...authentication.source === undefined ? {} : { source: authentication.source },
       ...authentication.error === undefined ? {} : { error: authentication.error },
     },

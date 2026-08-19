@@ -33,6 +33,22 @@ export interface ProviderAuthenticationView {
   error?: string
   /** Provider-owned sign-in actions. */
   methods: ProviderAuthMethodView[]
+  /** Whether this provider can report current account allowance state. */
+  usageSupported: boolean
+}
+
+/** One provider-account allowance window safe for browser presentation. */
+export interface ProviderUsageWindowView {
+  id: string
+  usedPercent: number
+  durationMinutes?: number
+  resetsAtMs?: number
+}
+
+/** Current non-secret provider-account usage. */
+export interface ProviderUsageView {
+  capturedAtMs: number
+  windows: ProviderUsageWindowView[]
 }
 
 /** Latest non-secret progress from a provider sign-in flow. */
@@ -140,6 +156,12 @@ export interface LlmApi {
 
   /** Remove one provider's persisted interactive credential. */
   logoutProvider(request: RpcRequest<{ provider: string }>): Promise<RpcResponse<{}>>
+
+  /** Read current non-secret account allowance state for one provider. */
+  providerUsage(
+    request: RpcRequest<{ provider: string }>,
+    signal?: AbortSignal,
+  ): Promise<RpcResponse<{ usage?: ProviderUsageView }>>
 }
 
 /** Wire view of one model an interrogated endpoint advertises. */

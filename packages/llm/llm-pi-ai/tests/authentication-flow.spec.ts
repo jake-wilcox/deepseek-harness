@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuthInteraction } from '@earendil-works/pi-ai'
 import type { LlmProviderAuthInteraction } from '@deepseek-ai/dsh-llm'
 
@@ -7,6 +7,7 @@ const models = vi.hoisted(() => ({
   checkAuth: vi.fn(),
   login: vi.fn(),
   logout: vi.fn(),
+  getAuth: vi.fn(),
 }))
 
 vi.mock('@earendil-works/pi-ai', async (importOriginal) => {
@@ -26,7 +27,10 @@ beforeEach(() => {
   models.checkAuth.mockReset()
   models.login.mockReset()
   models.logout.mockReset()
+  models.getAuth.mockReset()
 })
+
+afterEach(() => { vi.unstubAllGlobals() })
 
 describe('OpenAI Codex pi-ai authentication flow', () => {
   it('projects status and delegates logout to the installed provider', async () => {
@@ -86,6 +90,80 @@ describe('OpenAI Codex pi-ai authentication flow', () => {
     })
     expect(notify).toHaveBeenNthCalledWith(3, { kind: 'progress', message: 'Waiting' })
     expect(notify).toHaveBeenNthCalledWith(4, { kind: 'progress', message: 'Approved' })
+  })
+
+  it('refreshes Harness OAuth and maps provider usage windows without exposing credentials', async () => {
+    const credentials = {
+      read: vi.fn(() => Promise.resolve({ type: 'oauth', accountId: 'account-1' })),
+    }
+    models.getAuth.mockResolvedValue({ auth: { apiKey: 'fresh-token' } })
+    let requestInput: RequestInfo | URL | undefined
+    let requestInit: RequestInit | undefined
+    const request = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      requestInput = input
+      requestInit = init
+      return Promise.resolve(new Response(JSON.stringify({
+        plan_type: 'plus',
+        rate_limit: {
+          primary_window: { used_percent: 25.5, limit_window_seconds: 18_000, reset_at: 1_800_000_000 },
+          secondary_window: { used_percent: 60, limit_window_seconds: 604_800, reset_at: 1_800_600_000 },
+        },
+      }), { headers: { 'content-type': 'application/json' } }))
+    })
+    vi.stubGlobal('fetch', request)
+    const authentication = openAiCodexAuthentication(credentials as never)
+    const signal = new AbortController().signal
+
+    const usage = await authentication.usage?.(signal)
+    expect(usage?.capturedAtMs).toBeGreaterThan(0)
+    expect(usage?.windows).toEqual([
+      { id: 'primary', usedPercent: 25.5, durationMinutes: 300, resetsAtMs: 1_800_000_000_000 },
+      { id: 'secondary', usedPercent: 60, durationMinutes: 10_080, resetsAtMs: 1_800_600_000_000 },
+    ])
+    expect(models.getAuth).toHaveBeenCalledWith('openai-codex')
+    expect(credentials.read).toHaveBeenCalledWith('openai-codex')
+    expect(requestInput).toBe('https://chatgpt.com/backend-api/wham/usage')
+    expect(requestInit?.signal).toBe(signal)
+    const requestHeaders = new Headers(requestInit?.headers)
+    expect(requestHeaders.get('authorization')).toBe('Bearer fresh-token')
+    expect(requestHeaders.get('ChatGPT-Account-Id')).toBe('account-1')
+    expect(JSON.stringify(await authentication.usage?.())).not.toContain('fresh-token')
+    expect(JSON.stringify(await authentication.usage?.())).not.toContain('account-1')
+  })
+
+  it('stops after an OAuth refresh when the usage reader is cancelled', async () => {
+    const credentials = { read: vi.fn() }
+    const authGate = Promise.withResolvers<{ auth: { apiKey: string } }>()
+    models.getAuth.mockReturnValue(authGate.promise)
+    const request = vi.fn()
+    vi.stubGlobal('fetch', request)
+    const authentication = openAiCodexAuthentication(credentials as never)
+    const controller = new AbortController()
+
+    const pending = authentication.usage?.(controller.signal)
+    controller.abort()
+    authGate.resolve({ auth: { apiKey: 'fresh-token' } })
+    await expect(pending).rejects.toMatchObject({ code: 'ABORTED' })
+    expect(credentials.read).not.toHaveBeenCalled()
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it('uses configured Codex API bases and rejects missing or malformed usage', async () => {
+    const credentials = { read: vi.fn(() => Promise.resolve({ type: 'oauth', accountId: 'account-1' })) }
+    models.getAuth.mockResolvedValue({ auth: { apiKey: 'token' } })
+    const request = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ rate_limit: {
+        primary_window: { used_percent: 0, limit_window_seconds: 60, reset_at: 1_800_000_000 },
+      } })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ rate_limit: {} })))
+    vi.stubGlobal('fetch', request)
+    const authentication = openAiCodexAuthentication(credentials as never, () => 'https://example.test/api/codex')
+    await expect(authentication.usage?.()).resolves.toMatchObject({ windows: [{ id: 'primary', usedPercent: 0 }] })
+    expect(request).toHaveBeenNthCalledWith(1, 'https://example.test/api/codex/usage', expect.any(Object))
+    await expect(authentication.usage?.()).rejects.toMatchObject({ code: 'PROVIDER_USAGE_FAILED' })
+
+    models.getAuth.mockResolvedValue({ auth: { apiKey: '' } })
+    await expect(authentication.usage?.()).rejects.toMatchObject({ code: 'PROVIDER_USAGE_UNAVAILABLE' })
   })
 
   it('rejects unsupported methods, prompts, and callback-style authentication', async () => {

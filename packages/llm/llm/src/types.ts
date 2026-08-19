@@ -175,6 +175,26 @@ export interface LlmProviderAuthStatus {
   source?: string
 }
 
+/** One provider-account allowance window, independent of per-call token accounting. */
+export interface LlmProviderUsageWindow {
+  /** Provider-local stable identity such as `primary` or `secondary`. */
+  id: string
+  /** Percentage of this allowance consumed, from zero through one hundred. */
+  usedPercent: number
+  /** Window duration in minutes when the provider reports it. */
+  durationMinutes?: number
+  /** Absolute reset time in Unix epoch milliseconds when the provider reports it. */
+  resetsAtMs?: number
+}
+
+/** Non-secret provider-account usage captured at one instant. */
+export interface LlmProviderUsageSnapshot {
+  /** Capture time in Unix epoch milliseconds. */
+  capturedAtMs: number
+  /** Provider-owned allowance windows in display order. */
+  windows: LlmProviderUsageWindow[]
+}
+
 /** Progress emitted by a provider-owned sign-in flow. */
 export type LlmProviderAuthNotification = {
   /** A browser URL and short code the user must enter there. */
@@ -218,6 +238,12 @@ export interface LlmProviderAuthentication {
   login(method: string, interaction: LlmProviderAuthInteraction): Promise<void>
   /** Remove the provider's persisted interactive credential. */
   logout(): Promise<void>
+  /**
+   * Read current non-secret provider-account allowance state when supported.
+   * @param signal - optional cancellation for the provider request.
+   * @returns the current usage snapshot.
+   */
+  usage?(signal?: AbortSignal): Promise<LlmProviderUsageSnapshot>
 }
 
 /** Authentication state plus the provider's available interactive methods. */
@@ -226,6 +252,8 @@ export interface LlmProviderAuthenticationView extends LlmProviderAuthStatus {
   provider: string
   /** Detached interactive methods in provider-preferred order. */
   methods: LlmProviderAuthMethod[]
+  /** Whether the provider can report current account allowance state. */
+  usageSupported: boolean
   /** Safe diagnostic when status could not be read. */
   error?: string
 }

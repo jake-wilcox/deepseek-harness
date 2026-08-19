@@ -14,6 +14,8 @@ import type {
   ProviderAuthMethodView,
   ProviderAuthNotificationView,
   ProviderLoginAttemptView,
+  ProviderUsageView,
+  ProviderUsageWindowView,
 } from './llm.ts'
 import { modelCatalogFailureSchema, modelProviderGroupSchema } from './sessions.schema.ts'
 
@@ -35,6 +37,7 @@ export const providerAuthenticationViewSchema = z.object({
   source: z.string().min(1).optional(),
   error: z.string().min(1).optional(),
   methods: z.array(providerAuthMethodViewSchema).min(1),
+  usageSupported: z.boolean(),
 }) satisfies z.ZodType<Wire<ProviderAuthenticationView>>
 
 /** Provider sign-in progress discriminated by kind. */
@@ -155,3 +158,27 @@ export const llmLogoutProviderRequestSchema = z.object({ provider: z.string().mi
 
 /** llm.logoutProvider response value. */
 export const llmLogoutProviderValueSchema = z.object({}) satisfies z.ZodType<Wire<ResponseValue<'llm.logoutProvider'>>>
+
+/** One provider account allowance window. */
+export const providerUsageWindowViewSchema = z.object({
+  id: z.string().min(1),
+  usedPercent: z.number().min(0).max(100),
+  durationMinutes: z.number().positive().optional(),
+  resetsAtMs: z.number().int().nonnegative().optional(),
+}) satisfies z.ZodType<Wire<ProviderUsageWindowView>>
+
+/** Current provider account allowance state. */
+export const providerUsageViewSchema = z.object({
+  capturedAtMs: z.number().int().nonnegative(),
+  windows: z.array(providerUsageWindowViewSchema).min(1),
+}) satisfies z.ZodType<Wire<ProviderUsageView>>
+
+/** llm.providerUsage request payload. */
+export const llmProviderUsageRequestSchema = z.object({
+  provider: z.string().min(1),
+}) satisfies z.ZodType<Wire<RequestPayload<'llm.providerUsage'>>>
+
+/** llm.providerUsage response value. */
+export const llmProviderUsageValueSchema = z.object({
+  usage: providerUsageViewSchema.optional(),
+}) satisfies z.ZodType<Wire<ResponseValue<'llm.providerUsage'>>>

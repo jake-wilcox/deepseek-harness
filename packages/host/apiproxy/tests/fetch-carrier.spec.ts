@@ -293,6 +293,9 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
       async logoutProvider(request) {
         return { rpcId: request.rpcId, result: { ok: true, value: {} } }
       },
+      async providerUsage(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: {} } }
+      },
     },
     events: {
       mux: (_request, signal) => stream(muxFrames, signal),

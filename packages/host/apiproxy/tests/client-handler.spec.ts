@@ -130,6 +130,7 @@ function scriptedApi(overrides: {
       providerLoginAttempt: err,
       cancelProviderLogin: err,
       logoutProvider: err,
+      providerUsage: r => ok(r, {}),
       ...overrides.llm,
     },
     events: { mux: () => empty<MuxFrame>(), host: () => empty<HostFrame>(), ...overrides.events },

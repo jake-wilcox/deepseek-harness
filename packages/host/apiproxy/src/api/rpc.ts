@@ -82,6 +82,8 @@ export interface RpcErrorDetailsMap {
   'model-discovery-failed': { settingsNs: string; baseURL?: string }
   /** Starting, polling, cancelling, or removing provider authentication failed. */
   'provider-auth-failed': { provider: string }
+  /** Reading provider-account allowance state failed or is unsupported. */
+  'provider-usage-failed': { provider: string }
   'title-invalid': { sessionId: SessionId }
   'fork-unavailable': { sessionId: SessionId }
   'subagent-parent-unavailable': { parentSessionId: SessionId }

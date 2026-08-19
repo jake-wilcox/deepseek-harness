@@ -17,8 +17,9 @@
 - `ctx.llm.registerModelDiscovery(settingsNs: string, discover): () => void` 为本插件拥有的 settings namespace 提供查询提供方端点的能力。每个 namespace 只能有一个（`INVALID_DISCOVERY`/`DUPLICATE_DISCOVERY`），并随调用 fiber dispose。
 - `ctx.llm.listModelDiscoveryNamespaces(): string[]` 列出可以询问端点的 namespace，让界面只在可用之处提供该动作。
 - `ctx.llm.discoverModels(settingsNs: string, request: LlmModelDiscoveryRequest): Promise<LlmDiscoveredModel[]>` 询问某个端点它公布了哪些模型。
-- `ctx.llm.registerProviderAuthentication(provider, definition): () => void` 注册一个由提供方拥有的交互式认证实现。认证方式、状态、登录和退出随 fiber 生命周期管理；dispose 会取消活动登录。
-- `ctx.llm.providerAuthentication(provider): Promise<LlmProviderAuthenticationView | undefined>` 读取已分离、不含机密的状态和可用交互方式。
+- `ctx.llm.registerProviderAuthentication(provider, definition): () => void` 注册一个由提供方拥有的交互式认证实现。认证方式、状态、登录、退出和可选账户用量查询随 fiber 生命周期管理；dispose 会先取消并排空活动登录或用量工作，再撤销全部操作。
+- `ctx.llm.providerAuthentication(provider): Promise<LlmProviderAuthenticationView | undefined>` 读取已分离、不含机密的状态、可用交互方式和账户用量支持标记。
+- `ctx.llm.providerUsage(provider, signal?): Promise<LlmProviderUsageSnapshot | undefined>` 按需读取已分离的提供方账户额度周期；`undefined` 表示当前没有注册用量操作。
 - `ctx.llm.startProviderLogin(provider, method): LlmProviderLoginAttempt`、`providerLoginAttempt(provider, attemptId)` 与 `cancelProviderLogin(provider, attemptId)` 用于启动、观察和取消后台登录。每个提供方同一时刻只能有一次活动尝试。
 - `ctx.llm.logoutProvider(provider): Promise<void>` 取消活动登录并移除该提供方持久化的交互式凭据。
 - `ctx.llm.providerRetryPolicy(provider: string): ResolvedRetryPolicy` 返回注册时捕获的提供方自身的重试策略，并解析 normal 默认值。
@@ -36,7 +37,9 @@
 
 每个拓扑提交点——适配器路由注册或 dispose、目录条目出现或撤回——都会在变更之后发出无载荷的 `llm/adapters-updated` 事件，消费方因此会重新读取 `listProviders()`/`listModels()`/`listConfigurableProviders()`，而不是轮询。观察者故障会被记录并隔离，不能否决变更；只有带 `INVARIANT` 码的故障会在通知完所有观察者后重新抛出。
 
-交互式认证在本 seam 中保持提供方无关，在下层则归提供方所有。Core 负责跟踪尝试，并且只暴露适合显示的进度（`device-code` 或进度文本）；具体实现负责协议交换、凭据持久化、刷新和退出。登录在后台运行，因此 RPC 能在用户前往另一页面之前先返回尝试 id。终止后的尝试会保留到下一次尝试将其替换；提供方错误写入日志，对外只给出安全的失败信息。注册、进度、完成、取消、退出和 dispose 都会发出 `llm/auth-updated(provider)`，客户端据此重新读取该提供方的视图。
+交互式认证在本 seam 中保持提供方无关，在下层则归提供方所有。Core 负责跟踪尝试，并且只暴露适合显示的进度（`device-code` 或进度文本）；具体实现负责协议交换、凭据持久化、刷新、退出，以及依赖该凭据的账户用量查询。登录在后台运行，因此 RPC 能在用户前往另一页面之前先返回尝试 id。终止后的尝试会保留到下一次尝试将其替换；提供方错误写入日志，对外只给出安全的失败信息。注册、进度、完成、取消、退出和 dispose 都会发出 `llm/auth-updated(provider)`，客户端据此重新读取该提供方的视图。
+
+`LlmProviderUsageSnapshot` 使用提供方本地 id、已用百分比、可选周期长度和可选重置时间描述账户级额度周期。它不是逐请求 `TokenUsage`：Core 不缓存也不持久化，只由消费方在需要时请求新快照。无效时间戳、重复或空的周期 id、空周期集合、超出范围的百分比和非正周期长度都会以 `INVALID_PROVIDER_USAGE` 失败。
 
 确切模型元数据是独立的正确性查询，不是 catalog 装饰或全局 LLM 设置。`resolveModelInfo()` 会向拥有精确提供方／模型路由的适配器查询一次；适配器可以描述未列出的动态模型。缺少 `context` 表示模型容量未知；缺少 `defaultMaxTokens` 表示继续沿用提供方自身的输出默认值；缺少 `reasoning` 则表示推理能力不可用。无效的身份、上下文、输出默认值或推理元数据会以 `INVALID_MODEL_INFO`、`INVALID_MODEL_CONTEXT`、`INVALID_MODEL_MAX_TOKENS` 或 `INVALID_MODEL_REASONING` 失败。
 

@@ -120,6 +120,7 @@ const PRIVILEGED_METHODS = new Set([
   'llm.providerLoginAttempt',
   'llm.cancelProviderLogin',
   'llm.logoutProvider',
+  'llm.providerUsage',
 ])
 
 /**

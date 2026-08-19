@@ -2986,6 +2986,15 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         },
       }),
       logoutProvider: request => ok(request, {}),
+      providerUsage: request => ok(request, {
+        usage: {
+          capturedAtMs: 1_800_000_000_000,
+          windows: [
+            { id: 'primary', usedPercent: 28, durationMinutes: 300, resetsAtMs: 1_800_007_200_000 },
+            { id: 'secondary', usedPercent: 61, durationMinutes: 10_080, resetsAtMs: 1_800_259_200_000 },
+          ],
+        },
+      }),
     },
     respond(message: ClientResponse): Promise<RpcReceipt> {
       // Same routing discipline as the host: rpcId first, then the payload's
@@ -3158,6 +3167,7 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'llm.providerLoginAttempt': return this.api.llm.providerLoginAttempt(request)
       case 'llm.cancelProviderLogin': return this.api.llm.cancelProviderLogin(request)
       case 'llm.logoutProvider': return this.api.llm.logoutProvider(request)
+      case 'llm.providerUsage': return this.api.llm.providerUsage(request, signal)
     }
   }
 

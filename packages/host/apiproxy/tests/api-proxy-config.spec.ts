@@ -716,6 +716,7 @@ describe('llm domain', () => {
     expect(expectOk(await api.llm.providers(request({}))).providers[0]?.authentication).toEqual({
       authenticated: false,
       methods: [{ id: 'device', name: 'Sign in', kind: 'device-code' }],
+      usageSupported: false,
     })
     const started = expectOk(await api.llm.startProviderLogin(request({
       provider: 'deepseek-official',
@@ -746,6 +747,48 @@ describe('llm domain', () => {
     expect(JSON.stringify(expectOk(await api.llm.providers(request({}))))).not.toContain('token')
     expectOk(await api.llm.logoutProvider(request({ provider: 'deepseek-official' })))
     expect(logout).toHaveBeenCalledOnce()
+  })
+
+  it('projects provider usage, capability withdrawal, cancellation, and safe failures', async () => {
+    const ctx = await harness()
+    vi.spyOn(ctx.logger, 'warn').mockImplementation(() => undefined)
+    const signal = new AbortController().signal
+    const usage = vi.fn((_signal?: AbortSignal) => Promise.resolve({
+      capturedAtMs: 1_800_000_000_000,
+      windows: [{ id: 'primary', usedPercent: 25, durationMinutes: 300 }],
+    }))
+    ctx.llm.registerProviderAuthentication('deepseek-official', {
+      methods: [{ id: 'device', name: 'Sign in', kind: 'device-code' }],
+      status: () => Promise.resolve({ authenticated: true }),
+      login: () => Promise.resolve(),
+      logout: () => Promise.resolve(),
+      usage,
+    })
+    const api = createApiProxy(ctx, DEFAULTS)
+    expect(expectOk(await api.llm.providers(request({}))).providers[0]?.authentication?.usageSupported).toBe(true)
+    expect(expectOk(await api.llm.providerUsage(request({ provider: 'deepseek-official' }), signal))).toEqual({
+      usage: {
+        capturedAtMs: 1_800_000_000_000,
+        windows: [{ id: 'primary', usedPercent: 25, durationMinutes: 300 }],
+      },
+    })
+    const forwardedSignal = usage.mock.calls[0]?.[0]
+    expect(forwardedSignal).toBeInstanceOf(AbortSignal)
+    expect(forwardedSignal).not.toBe(signal)
+    expect(expectOk(await api.llm.providerUsage(request({ provider: 'missing' })))).toEqual({})
+
+    const aborted = new AbortController()
+    aborted.abort()
+    expect(expectErr(await api.llm.providerUsage(request({ provider: 'deepseek-official' }), aborted.signal)).code).toBe('cancelled')
+
+    usage.mockRejectedValueOnce(new Error('secret account detail'))
+    const failure = expectErr(await api.llm.providerUsage(request({ provider: 'deepseek-official' })))
+    expect(failure).toEqual({
+      code: 'provider-usage-failed',
+      message: 'Account usage is unavailable.',
+      details: { provider: 'deepseek-official' },
+    })
+    expect(JSON.stringify(failure)).not.toContain('secret account detail')
   })
 
   it('maps invalid provider authentication operations to provider-auth-failed', async () => {

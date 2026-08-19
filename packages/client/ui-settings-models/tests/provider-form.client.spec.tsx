@@ -663,6 +663,7 @@ describe('provider rows', () => {
 describe('interactive provider authentication', () => {
   const authentication = (authenticated = false): ProviderAuthenticationView => ({
     authenticated,
+    usageSupported: false,
     ...authenticated ? { source: 'OAuth' } : {},
     methods: [{ id: 'chatgpt-device-code', name: 'Sign in with ChatGPT', kind: 'device-code' }],
   })
@@ -690,7 +691,7 @@ describe('interactive provider authentication', () => {
   it('falls back to generic sign-in copy for an empty method list', () => {
     render(<ProviderAuthentication
       provider="openai-codex"
-      authentication={{ authenticated: false, methods: [] }}
+      authentication={{ authenticated: false, methods: [], usageSupported: false }}
       api={{ llm: {} } as never}
       t={t}
       disabled={false}
@@ -744,6 +745,7 @@ describe('interactive provider authentication', () => {
             authentication: {
               authenticated: true,
               source: 'OAuth',
+              usageSupported: false,
               methods: [{ id: 'chatgpt-device-code', name: 'Sign in with ChatGPT', kind: 'device-code' as const }],
             },
           }],
@@ -753,6 +755,7 @@ describe('interactive provider authentication', () => {
         provider="openai-codex"
         authentication={{
           authenticated: false,
+          usageSupported: false,
           methods: [{ id: 'chatgpt-device-code', name: 'Sign in with ChatGPT', kind: 'device-code' }],
         }}
         api={{ llm } as never}
@@ -779,6 +782,7 @@ describe('interactive provider authentication', () => {
     const authentication = {
       authenticated: true,
       source: 'OAuth',
+      usageSupported: false,
       methods: [{ id: 'chatgpt-device-code', name: 'Sign in with ChatGPT', kind: 'device-code' as const }],
     }
     render(<ProviderAuthentication

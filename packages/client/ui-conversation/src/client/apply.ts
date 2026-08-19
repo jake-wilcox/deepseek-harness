@@ -278,12 +278,12 @@ export function apply(ctx: Context): void {
   slots.register({
     name: 'conversation.composer.bar',
     locale: NS,
-    // The two named control seats in the bar's tool row (plan beside the
-    // access control, model right); empty until their owning plugins
-    // register.
+    // Named controls fill the tool row; provider account usage fills the
+    // ContextMeter dialog without making conversation depend on a provider.
     children: {
       'conversation.input.plan': { kind: 'single', scope: 'session' },
       'conversation.input.model': { kind: 'single', scope: 'session' },
+      'conversation.composer.contextMeter.usage': { kind: 'single', scope: 'session' },
     },
     inject: (sessionId: SessionId | undefined): ComposerBarInjected => {
       if (sessionId === undefined) {

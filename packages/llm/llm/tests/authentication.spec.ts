@@ -31,9 +31,73 @@ describe('provider authentication', () => {
       methods: [{ id: 'device', name: 'Sign in', kind: 'device-code' }],
       authenticated: true,
       source: 'OAuth',
+      usageSupported: false,
     })
     ;(definition.methods as Array<{ id: string; name: string; kind: 'device-code' }>)[0]!.name = 'mutated'
     expect((await ctx.llm.providerAuthentication('openai-codex'))?.methods[0]?.name).toBe('Sign in')
+  })
+
+  it('advertises, forwards, validates, and detaches provider account usage', async () => {
+    const ctx = await setup()
+    const signal = new AbortController().signal
+    const source = {
+      capturedAtMs: 1_800_000_000_000,
+      windows: [{ id: 'primary', usedPercent: 25, durationMinutes: 300, resetsAtMs: 1_800_000_300_000 }],
+    }
+    const usage = vi.fn((_signal?: AbortSignal) => Promise.resolve(source))
+    ctx.llm.registerProviderAuthentication('openai-codex', authentication({ usage }))
+
+    await expect(ctx.llm.providerAuthentication('openai-codex')).resolves.toMatchObject({ usageSupported: true })
+    const snapshot = await ctx.llm.providerUsage('openai-codex', signal)
+    const forwardedSignal = usage.mock.calls[0]?.[0]
+    expect(forwardedSignal).toBeInstanceOf(AbortSignal)
+    expect(forwardedSignal).not.toBe(signal)
+    expect(snapshot).toEqual(source)
+    expect(snapshot).not.toBe(source)
+    expect(snapshot?.windows).not.toBe(source.windows)
+    source.windows[0]!.usedPercent = 90
+    expect(snapshot?.windows[0]?.usedPercent).toBe(25)
+    await expect(ctx.llm.providerUsage('missing')).resolves.toBeUndefined()
+  })
+
+  it('aborts and drains provider usage when its registration leaves', async () => {
+    const ctx = await setup()
+    let usageSignal: AbortSignal | undefined
+    const dispose = ctx.llm.registerProviderAuthentication('openai-codex', authentication({
+      usage: signal => new Promise<never>((_resolve, reject) => {
+        usageSignal = signal
+        signal?.addEventListener('abort', () => { reject(new Error('usage cancelled')) }, { once: true })
+      }),
+    }))
+
+    const pending = ctx.llm.providerUsage('openai-codex')
+    await vi.waitFor(() => { expect(usageSignal).toBeDefined() })
+    dispose()
+    await expect(pending).rejects.toThrow('usage cancelled')
+    expect(usageSignal?.aborted).toBe(true)
+    await vi.waitFor(async () => {
+      await expect(ctx.llm.providerAuthentication('openai-codex')).resolves.toBeUndefined()
+    })
+  })
+
+  it('rejects invalid provider usage snapshots', async () => {
+    const invalid = [
+      { capturedAtMs: -1, windows: [{ id: 'primary', usedPercent: 1 }] },
+      { capturedAtMs: 1, windows: [] },
+      { capturedAtMs: 1, windows: [{ id: '', usedPercent: 1 }] },
+      { capturedAtMs: 1, windows: [{ id: 'primary', usedPercent: 101 }] },
+      { capturedAtMs: 1, windows: [{ id: 'primary', usedPercent: 1 }, { id: 'primary', usedPercent: 2 }] },
+      { capturedAtMs: 1, windows: [{ id: 'primary', usedPercent: 1, durationMinutes: 0 }] },
+      { capturedAtMs: 1, windows: [{ id: 'primary', usedPercent: 1, resetsAtMs: -1 }] },
+    ]
+    for (const [index, snapshot] of invalid.entries()) {
+      const ctx = await setup()
+      const provider = `invalid-usage-${String(index)}`
+      ctx.llm.registerProviderAuthentication(provider, authentication({
+        usage: () => Promise.resolve(snapshot),
+      }))
+      await expect(ctx.llm.providerUsage(provider)).rejects.toMatchObject({ code: 'INVALID_PROVIDER_USAGE' })
+    }
   })
 
   it('publishes progress and reaches success without blocking the start call', async () => {

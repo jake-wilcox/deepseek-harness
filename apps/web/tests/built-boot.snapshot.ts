@@ -57,6 +57,13 @@ it('boots the built plugin graph and renders a fixture session end to end', asyn
   within(contextPanel).getByText('System prompt')
   within(contextPanel).getByText('Tools')
   within(contextPanel).getByText('Messages')
+  // The independent provider-usage plugin resolves the same session route and
+  // fills ContextMeter's child slot through the real privileged fixture RPC.
+  await within(contextPanel).findByText('Subscription usage')
+  within(contextPanel).getByText('5h window')
+  within(contextPanel).getByText('28% used')
+  within(contextPanel).getByText('7d window')
+  within(contextPanel).getByText('61% used')
 
   // The write/edit turns render a real diff card through the assembled graph
   // (the keyed FileMutationRow composing ToolRow + DiffBlock), not just the

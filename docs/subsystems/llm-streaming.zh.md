@@ -665,6 +665,8 @@ interface LlmCallConfigAdapterDefaults {
 
 `registerProviderAuthentication()` 把实现限制在调用方 fiber 的生命周期内。`providerAuthentication()` 返回 `LlmProviderAuthenticationView`，而启动、轮询、取消与退出方法作用于确切的提供方和尝试。每次注册或尝试提交都会把 `llm/auth-updated(provider)` 作为不可否决的失效事件发出；消费方重新读取视图。提供方失败会写入日志，再缩减为适合显示的安全文本，因此 OAuth 响应无法通过 Host wire 泄漏凭据。
 
+注册还可以提供账户用量查询。`usageSupported` 只公布该操作而不会执行它；消费方主动请求时，`providerUsage(provider, signal?)` 才返回已分离的 `LlmProviderUsageSnapshot`。每份快照包含一个或多个由提供方定义 id 的额度周期，以及已用百分比、以分钟计的可选周期长度和以毫秒纪元计的可选重置时间。该状态属于账户元数据，而不是逐请求 `TokenUsage`；LLM 服务不会缓存、持久化它，也不会通过会话事件发布它。
+
 ## 服务与提供方约定
 
 `LlmAdapter` 是提供方约定：创建子类、实现 `stream()`，再用 `ctx.llm.registerAdapter(providers, adapter)` 注册一个适配器实例。`GenerateOptions.provider` 选择已注册适配器；`GenerateOptions.model` 会传给该适配器，无需在生命周期启动时注册。重复提供方路由会原子失败。可选的 `providerRetryPolicy()` 会按路由捕获并填入 normal 默认值，`providerInfo()` 与异步 `listModels()` 方法则为 `LlmRuntime.listProviders()` / `listModels()` 提供分离的 selector 元数据。该目录仅供参考，不是请求白名单：适配器仍是权威，并可接受未列出的模型 id。单次异步 `resolveModel()` 查询返回确切模型身份，以及可选的对正确性敏感的上下文容量、适配器配置的 `defaultMaxTokens`、由模型持有的有序推理强度 ID 和可选的部署默认值；字段缺失表示元数据不可用或保留提供方持有的行为，而不表示目录成员关系无效。解析器会接收可选的取消信号，并且必须在信号中止后迅速完成结算。`LlmRuntime.resolveModelInfo()` 会校验聚合结果并返回分离值。在最终适配器边界，`resolveCallConfig()` 仅在 `maxTokens` 缺失时填入输出默认值，并校验和填入推理强度，因此直接调用也无法绕过任何一项已配置行为；直接分派会在等待解析前捕获一项适配器注册。agent loop 则使用 `prepareCall()`，使模型解析、请求头持久记录和分派全程使用同一项注册，保留来自同一次查询的分离上下文元数据，并报告适配器填入的配置字段。适配器查找发生在 `llm/stream` waterfall 的终端 continuation，因此 listener 可以在查找前短路调用，或路由一个可变的一次性请求。AgentLoop 在外层 waterfall 返回流句柄时观察到一次请求尝试；这个有限边界不能证明惰性终端适配器已构造完成或开始提供方 I/O。`block-start` / `block-end` 的 `index` 关联与 assembler 共同意味着适配器只需 emit 格式正确的分片——块重组不是每个适配器各自的问题。`ctx.llm.stream()` 与 `llm/stream` waterfall 在一个轮次中的位置见 [architecture.md](../architecture.md#turn-flow)。
@@ -761,7 +763,7 @@ The abstract `llm` service: an adapter registry plus a streaming model-call API,
 ```ts cordis-catalog
 /**
  * Register the interactive authentication implementation for one provider.
- * The registration is fiber-scoped; disposal cancels its active attempt.
+ * The registration is fiber-scoped; disposal cancels its active login attempt and usage queries.
  * @param provider - non-empty provider route.
  * @param definition - methods, status query, login, and logout implementation.
  * @returns the fire-and-forget disposer.
@@ -774,6 +776,15 @@ registerProviderAuthentication(provider: string, definition: LlmProviderAuthenti
  * @returns the detached view, or `undefined` when no implementation is registered.
  */
 async providerAuthentication(provider: string): Promise<LlmProviderAuthenticationView | undefined>
+
+/**
+ * Read current non-secret account usage for one provider.
+ * @param provider - provider route to inspect.
+ * @param signal - optional cancellation for the provider request.
+ * @returns a detached snapshot, or `undefined` when no usage operation is currently registered.
+ * @throws {LlmError} `INVALID_PROVIDER_USAGE` when the provider violates the snapshot obligations; provider failures propagate.
+ */
+async providerUsage(provider: string, signal?: AbortSignal): Promise<LlmProviderUsageSnapshot | undefined>
 
 /**
  * Start one provider sign-in attempt without waiting for user interaction.
@@ -923,7 +934,7 @@ async prepareCall(config: LlmCallConfig, signal?: AbortSignal): Promise<Prepared
 stream(options: GenerateOptions): AsyncIterable<StreamChunk>
 ```
 
-Source: [`packages/llm/llm/src/index.ts:301`](../../packages/llm/llm/src/index.ts)
+Source: [`packages/llm/llm/src/index.ts:309`](../../packages/llm/llm/src/index.ts)
 
 <a id="llm-events"></a>
 
@@ -991,5 +1002,5 @@ Waterfall around every streaming model call (retry, replay, routing). Bound to t
 'llm/stream'(this: LlmRuntime, options: GenerateOptions, next: () => AsyncIterable<StreamChunk>): AsyncIterable<StreamChunk>
 ```
 
-Source: [`packages/llm/llm/src/index.ts:69`](../../packages/llm/llm/src/index.ts)
+Source: [`packages/llm/llm/src/index.ts:70`](../../packages/llm/llm/src/index.ts)
 <!-- END GENERATED cordis-surface -->

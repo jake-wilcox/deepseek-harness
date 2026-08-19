@@ -219,6 +219,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * a model here.
      */
     'conversation.input.model': { kind: 'single'; scope: 'session'; owner: InputControlOwnerProps }
+    /** Provider-account allowance content inside the ContextMeter popover. */
+    'conversation.composer.contextMeter.usage': { kind: 'single'; scope: 'session' }
   }
 
   /**
@@ -544,7 +546,9 @@ export interface InputControlOwnerProps {
 /** Full composer-bar props: standard kit & owner share & control-seat render share & injected share (hooks bound) & locale seat. */
 export type ComposerBarProps =
   PropsRuntime<'conversation.composer.bar'>
-  & PropsRenderSlots<'conversation.input.plan' | 'conversation.input.model'>
+  & PropsRenderSlots<
+    'conversation.input.plan' | 'conversation.input.model' | 'conversation.composer.contextMeter.usage'
+  >
   & InjectFace<ComposerBarInjected>
   & PropsLocale<'conversation'>
 
