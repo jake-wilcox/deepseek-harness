@@ -11,6 +11,7 @@
 | `@deepseek-ai/dsh-web`（本包） | Service Definition：服务、提供方注册表、选择策略、请求／结果词汇、`WebError` 分类体系 |
 | `@deepseek-ai/dsh-web-search-exa` | 搜索提供方：Exa |
 | `@deepseek-ai/dsh-web-search-perplexity` | 搜索提供方：Perplexity |
+| `@deepseek-ai/dsh-web-search-deepseek` | 搜索提供方：原生 DeepSeek 网页搜索 |
 | `@deepseek-ai/dsh-web-fetch-http` | 抓取提供方：匿名公共 HTTP(S) |
 | `@deepseek-ai/dsh-tool-web` | Consumer：面向模型的 `web_search`／`web_fetch` 工具 schema，构建于 `ctx.web` 之上 |
 
@@ -25,6 +26,10 @@
 | `fetch(request, signal?)` | 解析抓取提供方并获取一个 URL。非 2xx 响应是结果，不会抛出异常。无法安全获取或表示资源时抛出 `WebError`。 |
 
 提供方注册的是**能力**而非工具。`dsh-tool-web` 是面向模型的名称、描述、提示词指引、JSON Schema 和呈现的唯一归属方。
+
+## 提供方支持
+
+带凭证的提供方共享 seam 的请求机制而不是各自重写：`resolveProviderApiKey(options, errors, signal)` 解析一次操作的密钥（非空字面量优先，否则调用 resolver；缺失或为空时抛出提供方的 `WEB_PROVIDER_CREDENTIAL_MISSING`），`providerErrorMessage(response, fallback, detail, aborted, signal)` 把非 2xx 响应体投影为提供方的错误消息，`abortable(operation, signal, aborted)` 让同进程预备步骤与调用方取消竞速，`isAbortError(error)` 识别 fetch 中止。每个提供方提供一个携带自身用户可见文案的 `ProviderRequestErrors` 值，于是机制与错误码归 seam 所有，而每条消息仍归提供方所有。
 
 ## 选择
 

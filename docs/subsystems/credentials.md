@@ -122,7 +122,7 @@ abstract set(ref: CredentialRef, value: string): Promise<void>
 abstract unset(ref: CredentialRef): Promise<void>
 ```
 
-Source: [`packages/credentials/credentials/src/index.ts:60`](../../packages/credentials/credentials/src/index.ts)
+Source: [`packages/credentials/credentials/src/index.ts:111`](../../packages/credentials/credentials/src/index.ts)
 
 <a id="credentials-events"></a>
 

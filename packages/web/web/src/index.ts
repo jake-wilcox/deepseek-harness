@@ -193,6 +193,123 @@ function resolveProvider<P extends ResolvableProvider>(selection: Selection<P>):
   return single
 }
 
+/**
+ * True for a fetch/`AbortSignal` abort (`DOMException` named `AbortError`), surfaced as `WEB_ABORTED`.
+ * @param error - the caught failure to classify.
+ * @returns whether the failure is a fetch abort.
+ */
+export function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError'
+}
+
+/** Error factories a provider supplies to the seam's request helpers, carrying its user-facing strings. */
+export interface ProviderRequestErrors {
+  /** Build the provider's stable cancellation error, retaining the abort reason (or `fallback`). */
+  aborted: (signal?: AbortSignal, fallback?: unknown) => WebError
+  /** Wrap a credential-resolution failure as the provider's `WEB_PROVIDER_ERROR`. */
+  resolutionFailed: (error: unknown) => WebError
+  /** Name the missing credential and where to store it, as `WEB_PROVIDER_CREDENTIAL_MISSING`. */
+  missingCredential: () => WebError
+}
+
+/**
+ * Resolve one operation's provider API key without retaining it: a non-empty
+ * literal wins; otherwise the resolver answers for this operation; a missing
+ * or empty result is the provider's missing-credential error.
+ * @param options - the operation's snapshot carrying the literal and/or resolver.
+ * @param errors - the provider's error factories.
+ * @param signal - abort signal for the surrounding operation.
+ * @returns the resolved key.
+ */
+export async function resolveProviderApiKey(
+  options: { apiKey?: string; resolveApiKey?: () => Promise<string | undefined> },
+  errors: ProviderRequestErrors,
+  signal?: AbortSignal,
+): Promise<string> {
+  throwIfProviderAborted(signal, errors)
+  if (options.apiKey !== undefined && options.apiKey.length > 0) return options.apiKey
+  let resolved: string | undefined
+  try {
+    resolved = await abortable(options.resolveApiKey?.() ?? Promise.resolve(undefined), signal, errors.aborted)
+  } catch (error: unknown) {
+    if (signal?.aborted === true || isAbortError(error)) throw errors.aborted(signal, error)
+    throw errors.resolutionFailed(error)
+  }
+  if (resolved !== undefined && resolved.length > 0) return resolved
+  throw errors.missingCredential()
+}
+
+/** Throw the provider's cancellation error when the caller has already aborted. */
+function throwIfProviderAborted(signal: AbortSignal | undefined, errors: ProviderRequestErrors): void {
+  if (signal?.aborted === true) throw errors.aborted(signal)
+}
+
+/**
+ * Project a provider's non-2xx response onto its user-facing message: the JSON
+ * error body's detail when present, else `fallback` (which should carry the
+ * HTTP status). An abort mid-body surfaces as the provider's cancellation
+ * error — cancellation is not a provider error; any other body failure keeps
+ * `fallback`, since a malformed error body (normal for gateway 5xx/429s) can
+ * only cost a richer message, never the real error.
+ * @param response - the non-2xx response whose body may carry a detail.
+ * @param fallback - status-line message used when no detail is found.
+ * @param detail - extract the provider-specific detail from the parsed body.
+ * @param aborted - builds the provider's stable cancellation error.
+ * @param signal - abort signal for the surrounding operation.
+ * @returns the message for the provider's `WEB_PROVIDER_ERROR`.
+ */
+export async function providerErrorMessage(
+  response: Response,
+  fallback: string,
+  detail: (parsed: unknown) => string | undefined,
+  aborted: ProviderRequestErrors['aborted'],
+  signal?: AbortSignal,
+): Promise<string> {
+  try {
+    const parsed: unknown = await response.json()
+    const found = detail(parsed)
+    return found !== undefined && found.length > 0 ? found : fallback
+  } catch (error: unknown) {
+    if (signal?.aborted === true || isAbortError(error)) throw aborted(signal, error)
+    return fallback
+  }
+}
+
+/**
+ * Race a provider's same-process asynchronous preflight (credential resolution,
+ * a queued handshake) against caller cancellation, part of the seam's
+ * cancellation contract. The attached settlement handlers keep observing an
+ * uncooperative operation after abort so a later rejection cannot become
+ * unhandled; a non-abort rejection is re-thrown with its message preserved and
+ * the original failure chained as `cause`.
+ * @param operation - the preflight to await.
+ * @param signal - the caller's abort signal; absent means no cancellation.
+ * @param aborted - builds the provider's stable `WEB_ABORTED` error, given the signal whose reason it should retain.
+ * @returns the operation's value, or a rejection with the provider's cancellation error once `signal` aborts.
+ */
+export function abortable<T>(
+  operation: Promise<T>,
+  signal: AbortSignal | undefined,
+  aborted: (signal?: AbortSignal) => WebError,
+): Promise<T> {
+  if (signal === undefined) return operation
+  if (signal.aborted) return Promise.reject(aborted(signal))
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => { reject(aborted(signal)) }
+    signal.addEventListener('abort', onAbort, { once: true })
+    void operation.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(new Error(String(error).replace(/^Error: /u, ''), { cause: error }))
+      },
+    )
+  })
+}
+
 /** Enforce `maxResults` on a search result: truncate `sources[]` and flag it. */
 function capSources(result: WebSearchResult, maxResults: number | undefined): WebSearchResult {
   if (maxResults === undefined || result.sources.length <= maxResults) return result

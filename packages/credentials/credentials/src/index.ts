@@ -9,6 +9,7 @@
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
+import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import type { CredentialRef } from './types.ts'
 
 export type { CredentialRef } from './types.ts'
@@ -25,6 +26,56 @@ export function credentialRef(value: string): CredentialRef {
     throw new TypeError(`credential ref "${value}" must match ${String(REF_PATTERN)}`)
   }
   return value as CredentialRef
+}
+
+/**
+ * Resolve `ref` for one operation: the credentials service when composed,
+ * otherwise the ambient launch environment — without the seam the environment
+ * is the whole credential plane. Empty values count as absent. Consumers call
+ * this at each operation and must not cache across operations.
+ * @param ctx - context whose composition may carry the credentials service.
+ * @param ref - the reference to resolve.
+ * @returns the non-empty value, or `undefined` when no layer supplies one.
+ */
+export async function resolveCredential(ctx: Context, ref: CredentialRef): Promise<string | undefined> {
+  const credentials = ctx.get('credentials')
+  if (credentials !== undefined) return (await credentials.resolve(ref))?.value
+  const ambient = launchEnvironmentOf(ctx).get(ref)
+  return ambient !== undefined && ambient.value.length > 0 ? ambient.value : undefined
+}
+
+/** The per-operation credential plan a keyed provider assembles from its config. */
+export interface CredentialPlan {
+  /** Non-empty literal key, when the section configures one. */
+  apiKey?: string
+  /** Resolve the reference for one operation ({@link resolveCredential}). */
+  resolveApiKey: () => Promise<string | undefined>
+  /** The reference in force, named by missing-credential diagnostics. */
+  apiKeyEnv: CredentialRef
+}
+
+/**
+ * Assemble a provider's per-operation credential plan: a non-empty literal
+ * `apiKey` wins; otherwise each operation resolves `apiKeyEnv` through
+ * {@link resolveCredential}, so a stored or rotated value applies without a
+ * restart.
+ * @param ctx - context whose composition may carry the credentials service.
+ * @param config - the literal and reference the provider's section names.
+ * @param defaultRef - reference used when the section names none.
+ * @returns the plan to spread into the provider's resolved options.
+ */
+export function credentialPlan(
+  ctx: Context,
+  config: { apiKey?: string; apiKeyEnv?: string },
+  defaultRef: string,
+): CredentialPlan {
+  const apiKeyEnv = credentialRef(config.apiKeyEnv ?? defaultRef)
+  const literal = config.apiKey !== undefined && config.apiKey.length > 0 ? config.apiKey : undefined
+  return {
+    ...literal === undefined ? {} : { apiKey: literal },
+    resolveApiKey: () => resolveCredential(ctx, apiKeyEnv),
+    apiKeyEnv,
+  }
 }
 
 /** One resolved credential value and the source layer that supplied it. */

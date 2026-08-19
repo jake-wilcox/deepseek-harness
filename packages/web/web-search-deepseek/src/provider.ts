@@ -6,7 +6,8 @@
  * @module @deepseek-ai/dsh-web-search-deepseek/provider
  */
 
-import { WebError } from '@deepseek-ai/dsh-web'
+import { WebError, isAbortError, providerErrorMessage, resolveProviderApiKey } from '@deepseek-ai/dsh-web'
+import type { ProviderRequestErrors } from '@deepseek-ai/dsh-web'
 import type {
   WebSearchProvider,
   WebSearchRequest,
@@ -199,7 +200,7 @@ export class DeepSeekSearchProvider implements WebSearchProvider {
     // settings write landing inside that await must not send the key resolved
     // from the old section to the endpoint named by the new one.
     const options = this.resolveOptions()
-    const apiKey = await this.apiKey(options, signal)
+    const apiKey = await resolveProviderApiKey(options, requestErrors(options), signal)
     throwIfSearchAborted(signal)
     const endpoint = `${options.baseURL}/messages`
     const body: DeepSeekSearchLlmRequest['body'] = {
@@ -241,22 +242,16 @@ export class DeepSeekSearchProvider implements WebSearchProvider {
     }
 
     if (!response.ok) {
-      const status = response.status
-      let message = `DeepSeek API error (HTTP ${status})`
-      try {
-        const parsed = await response.json() as AnthropicError
-        const detail = typeof parsed.error === 'string' ? parsed.error : parsed.error?.message ?? parsed.message
-        if (detail !== undefined && detail.length > 0) message = detail
-      } catch (error: unknown) {
-        // An abort fired mid-body must surface as WEB_ABORTED, not be swallowed
-        // into a generic HTTP-error message — cancellation is not a provider
-        // error (the seam's cancellation contract).
-        if (signal?.aborted === true || isAbortError(error)) throw searchAborted(signal, error)
-        // Otherwise: the HTTP status is already captured in `message` above; a
-        // malformed/non-JSON error body (normal for gateway 5xx/429s) can only
-        // cost a richer provider message, never the real error.
-      }
-      throw new WebError(message, 'WEB_PROVIDER_ERROR')
+      throw new WebError(await providerErrorMessage(
+        response,
+        `DeepSeek API error (HTTP ${response.status})`,
+        (parsed) => {
+          const body = parsed as AnthropicError
+          return typeof body.error === 'string' ? body.error : body.error?.message ?? body.message
+        },
+        searchAborted,
+        signal,
+      ), 'WEB_PROVIDER_ERROR')
     }
 
     try {
@@ -268,60 +263,24 @@ export class DeepSeekSearchProvider implements WebSearchProvider {
       throw new WebError(`DeepSeek returned an unprocessable response body: ${String(error)}`, 'WEB_PROVIDER_ERROR', { cause: error })
     }
   }
-
-  /**
-   * Resolve one operation's credential without retaining it on the provider.
-   * @param options - the caller's snapshot, so the key and the endpoint it is sent to come from one section.
-   * @param signal - abort signal for the surrounding search.
-   * @returns the resolved key.
-   */
-  private async apiKey(options: DeepSeekSearchProviderOptions, signal?: AbortSignal): Promise<string> {
-    throwIfSearchAborted(signal)
-    if (options.apiKey !== undefined && options.apiKey.length > 0) return options.apiKey
-    let resolved: string | undefined
-    try {
-      resolved = await abortable(options.resolveApiKey?.() ?? Promise.resolve(undefined), signal)
-    } catch (error: unknown) {
-      if (signal?.aborted === true || isAbortError(error)) throw searchAborted(signal, error)
-      throw new WebError(
-        `DeepSeek search credential resolution failed: ${String(error)}`,
-        'WEB_PROVIDER_ERROR',
-        { cause: error },
-      )
-    }
-    if (resolved !== undefined && resolved.length > 0) return resolved
-    const ref = options.apiKeyEnv ?? 'DEEPSEEK_API_KEY'
-    throw new WebError(
-      `DeepSeek search has no API key for "${ref}"; store it through the credentials service`
-      + ' (the web Models page writes it), export it in the launching environment, or set a literal'
-      + ' "apiKey" in the web-search-deepseek config',
-      'WEB_PROVIDER_CREDENTIAL_MISSING',
-    )
-  }
 }
 
-/**
- * Race a same-process asynchronous preflight against caller cancellation. The
- * attached settlement handlers keep observing an uncooperative operation after
- * abort so a later rejection cannot become unhandled.
- */
-function abortable<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (signal === undefined) return operation
-  if (signal.aborted) return Promise.reject(searchAborted(signal))
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = (): void => { reject(searchAborted(signal)) }
-    signal.addEventListener('abort', onAbort, { once: true })
-    void operation.then(
-      (value) => {
-        signal.removeEventListener('abort', onAbort)
-        resolve(value)
-      },
-      (error: unknown) => {
-        signal.removeEventListener('abort', onAbort)
-        reject(new Error(String(error).replace(/^Error: /u, ''), { cause: error }))
-      },
-    )
-  })
+/** This provider's user-facing strings for the seam's credential resolution. */
+function requestErrors(options: DeepSeekSearchProviderOptions): ProviderRequestErrors {
+  return {
+    aborted: searchAborted,
+    resolutionFailed: error => new WebError(
+      `DeepSeek search credential resolution failed: ${String(error)}`,
+      'WEB_PROVIDER_ERROR',
+      { cause: error },
+    ),
+    missingCredential: () => new WebError(
+      `DeepSeek search has no API key for "${options.apiKeyEnv ?? 'DEEPSEEK_API_KEY'}"; store it`
+      + ' through the credentials service (the web Models page writes it), export it in the launching'
+      + ' environment, or set a literal "apiKey" in the web-search-deepseek config',
+      'WEB_PROVIDER_CREDENTIAL_MISSING',
+    ),
+  }
 }
 
 /** Throw the provider's stable cancellation error when the caller already aborted. */
@@ -334,11 +293,6 @@ function searchAborted(signal?: AbortSignal, fallback?: unknown): WebError {
   return new WebError('DeepSeek search aborted', 'WEB_ABORTED', {
     cause: signal?.aborted === true ? signal.reason : fallback,
   })
-}
-
-/** True for a fetch/`AbortSignal` abort, surfaced as `WEB_ABORTED`. */
-function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === 'AbortError'
 }
 
 /** True for DeepSeek request limits that can be sent to the Messages API. */

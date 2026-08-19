@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import WebRuntime, {
   WebError,
+  abortable,
   type WebFetchProvider,
   type WebFetchResult,
   type WebSearchProvider,
@@ -211,5 +212,41 @@ describe('WebError', () => {
     const error = new WebError('boom', 'WEB_INVALID_URL')
     expect(error.code).toBe('WEB_INVALID_URL')
     expect(error.name).toBe('WebError')
+  })
+})
+
+describe('abortable', () => {
+  const aborted = (signal?: AbortSignal): WebError =>
+    new WebError('operation aborted', 'WEB_ABORTED', { cause: signal?.reason })
+
+  it('passes the operation through when no signal is given', async () => {
+    await expect(abortable(Promise.resolve('value'), undefined, aborted)).resolves.toBe('value')
+  })
+
+  it('rejects with the provider error when the signal is already aborted', async () => {
+    const controller = new AbortController()
+    const reason = new Error('caller gone')
+    controller.abort(reason)
+    await expect(abortable(new Promise(() => {}), controller.signal, aborted))
+      .rejects.toMatchObject({ code: 'WEB_ABORTED', cause: reason })
+  })
+
+  it('rejects with the provider error when the signal fires mid-operation', async () => {
+    const controller = new AbortController()
+    const pending = abortable(new Promise(() => {}), controller.signal, aborted)
+    controller.abort()
+    await expect(pending).rejects.toThrow(expect.objectContaining({ code: 'WEB_ABORTED' }))
+  })
+
+  it('resolves the operation value under a live signal', async () => {
+    const controller = new AbortController()
+    await expect(abortable(Promise.resolve(42), controller.signal, aborted)).resolves.toBe(42)
+  })
+
+  it('re-throws a non-abort rejection with its message preserved and the failure chained', async () => {
+    const controller = new AbortController()
+    const failure = new Error('store sealed')
+    await expect(abortable(Promise.reject(failure), controller.signal, aborted))
+      .rejects.toThrow(expect.objectContaining({ message: 'store sealed', cause: failure }))
   })
 })

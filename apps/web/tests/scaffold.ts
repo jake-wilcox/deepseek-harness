@@ -237,8 +237,9 @@ export interface LaunchOptions {
   welcomeNoticePending?: boolean
   /**
    * Patch the shipped DeepSeek search row to a deterministic endpoint and
-   * credential reference. Browser search scenarios keep the real provider and
-   * credentials seam while avoiding external search traffic and ambient keys.
+   * credential reference, and pin `searchProvider` back to it (the shipped
+   * composition selects Exa). Browser search scenarios keep the real provider
+   * and credentials seam while avoiding external search traffic and ambient keys.
    */
   deepSeekSearch?: {
     /** Anthropic-compatible base URL; the provider appends `/messages`. */
@@ -484,6 +485,11 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
           apiKeyEnv: options.deepSeekSearch.apiKeyEnv,
           baseURL: options.deepSeekSearch.baseURL,
         },
+      }, {
+        // The lane drives the DeepSeek provider specifically; the shipped
+        // composition selects Exa, so pin selection back for this scenario.
+        id: 'web',
+        config: { searchProvider: 'deepseek-official' },
       }],
     ...mode === 'record' || options.deepSeekMissingCredential === true
       ? []

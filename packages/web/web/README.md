@@ -11,6 +11,7 @@ This package owns the Service Definition role of the web capability. Unlike shel
 | `@deepseek-ai/dsh-web` (this) | Service Definition: the service, provider registries, selection policy, request/result vocabulary, the `WebError` taxonomy |
 | `@deepseek-ai/dsh-web-search-exa` | Search provider: Exa |
 | `@deepseek-ai/dsh-web-search-perplexity` | Search provider: Perplexity |
+| `@deepseek-ai/dsh-web-search-deepseek` | Search provider: native DeepSeek web search |
 | `@deepseek-ai/dsh-web-fetch-http` | Fetch provider: anonymous public HTTP(S) |
 | `@deepseek-ai/dsh-tool-web` | Consumer: the model-facing `web_search` / `web_fetch` tool schemas over `ctx.web` |
 
@@ -25,6 +26,10 @@ Search and fetch share no request schema and no business logic, but they are del
 | `fetch(request, signal?)` | Resolve the fetch provider and retrieve one URL. A non-2xx response is a result, not a throw. Throws `WebError` for failures to safely retrieve or represent the resource. |
 
 Providers register **capabilities**, not tools. `dsh-tool-web` is the only owner of model-facing names, descriptions, prompt guidance, JSON schemas, and presentation.
+
+## Provider support
+
+Credentialed providers share the seam's request machinery instead of restating it: `resolveProviderApiKey(options, errors, signal)` resolves one operation's key (a non-empty literal wins, otherwise the resolver; a missing or empty result throws the provider's `WEB_PROVIDER_CREDENTIAL_MISSING`), `providerErrorMessage(response, fallback, detail, aborted, signal)` projects a non-2xx body onto the provider's error message, `abortable(operation, signal, aborted)` races a same-process preflight against caller cancellation, and `isAbortError(error)` classifies a fetch abort. Each provider supplies a `ProviderRequestErrors` value carrying its user-facing strings, so the seam owns the mechanics and codes while every message stays provider-owned.
 
 ## Selection
 

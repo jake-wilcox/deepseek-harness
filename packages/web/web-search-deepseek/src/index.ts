@@ -8,7 +8,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-agent'
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import { credentialPlan } from '@deepseek-ai/dsh-credentials'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import type {} from '@deepseek-ai/dsh-session'
@@ -93,20 +93,8 @@ export const WEB_SEARCH_DEEPSEEK_SETTINGS_NAMESPACE = settingsNamespace('web-sea
  * @returns options for one search.
  */
 function resolveOptions(ctx: Context, config: Config): DeepSeekSearchProviderOptions {
-  const apiKeyEnv = credentialRef(config.apiKeyEnv ?? DEFAULT_API_KEY_ENV)
-  const literalApiKey = config.apiKey !== undefined && config.apiKey.length > 0
-    ? config.apiKey
-    : undefined
   return {
-    ...literalApiKey === undefined ? {} : { apiKey: literalApiKey },
-    resolveApiKey: async () => {
-      const credentials = ctx.get('credentials')
-      if (credentials !== undefined) return (await credentials.resolve(apiKeyEnv))?.value
-      // Without the seam the environment is the whole credential plane.
-      const ambient = launchEnvironmentOf(ctx).get(apiKeyEnv)
-      return ambient !== undefined && ambient.value.length > 0 ? ambient.value : undefined
-    },
-    apiKeyEnv,
+    ...credentialPlan(ctx, config, DEFAULT_API_KEY_ENV),
     baseURL: config.baseURL
       ?? launchEnvironmentOf(ctx).get(SEARCH_BASE_URL_ENV)?.value
       ?? DEEPSEEK_DEFAULT_BASE_URL,

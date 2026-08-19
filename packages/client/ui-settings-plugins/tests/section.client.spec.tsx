@@ -354,7 +354,7 @@ describe('WebSearchCard', () => {
     const store = createSnapshotStore<WebSearchCardState>({
       ...settled,
       baseURL: field(''),
-      maxUses: field('5'),
+      numResults: field('5'),
       apiKey: field(''),
       apiKeyConfigured: false,
       apiKeyWritable: true,
@@ -397,23 +397,23 @@ describe('WebSearchCard', () => {
     expect(screen.getByLabelText(en.webSearchBaseUrl)).toHaveProperty('disabled', false)
   })
 
-  it('stages the endpoint, the search budget, and their resets', () => {
+  it('stages the endpoint, the result count, and their resets', () => {
     const actions = renderWebSearch({
       baseURL: field('https://search.test/v1', { overridden: true }),
-      maxUses: field('3', { overridden: true }),
+      numResults: field('3', { overridden: true }),
     })
     fireEvent.click(screen.getByText(en.webSearchTitle))
 
     fireEvent.change(screen.getByLabelText(en.webSearchBaseUrl), { target: { value: 'https://other.test' } })
-    fireEvent.change(screen.getByLabelText(en.webSearchMaxUses), { target: { value: '4' } })
+    fireEvent.change(screen.getByLabelText(en.webSearchNumResults), { target: { value: '4' } })
     const resets = screen.getAllByRole('button', { name: en.reset })
     expect(resets).toHaveLength(2)
     for (const reset of resets) fireEvent.click(reset)
 
     expect(actions.edit.mock.calls).toEqual([
       ['baseURL', 'https://other.test'],
-      ['maxUses', '4'],
+      ['numResults', '4'],
     ])
-    expect(actions.resetField.mock.calls).toEqual([['baseURL'], ['maxUses']])
+    expect(actions.resetField.mock.calls).toEqual([['baseURL'], ['numResults']])
   })
 })
