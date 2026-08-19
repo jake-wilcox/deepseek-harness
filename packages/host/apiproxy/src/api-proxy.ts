@@ -20,7 +20,7 @@ import {
   ReasoningEffortId,
 } from '@deepseek-ai/dsh-llm'
 import { errorChain } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, LlmProviderAuthenticationView, MessageSource } from '@deepseek-ai/dsh-llm'
 import { isAppendSurfaceEvent, isJsonValue } from '@deepseek-ai/dsh-session'
 import type { JsonValue, Session, SessionEvent, SessionEventMap, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
@@ -3325,14 +3325,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             settingsPath: [...entry.settingsPath],
             active: active.has(entry.provider),
             ...entry.declared === undefined ? {} : { declared: entry.declared },
-            ...authentication === undefined ? {} : {
-              authentication: {
-                authenticated: authentication.authenticated,
-                methods: authentication.methods.map(method => ({ ...method })),
-                ...authentication.source === undefined ? {} : { source: authentication.source },
-                ...authentication.error === undefined ? {} : { error: authentication.error },
-              },
-            },
+            ...authenticationView(authentication),
           }
         }))
         // Routes registered without a directory declaration still appear —
@@ -3347,14 +3340,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             settingsNs: '',
             settingsPath: [],
             active: true,
-            ...authentication === undefined ? {} : {
-              authentication: {
-                authenticated: authentication.authenticated,
-                methods: authentication.methods.map(method => ({ ...method })),
-                ...authentication.source === undefined ? {} : { source: authentication.source },
-                ...authentication.error === undefined ? {} : { error: authentication.error },
-              },
-            },
+            ...authenticationView(authentication),
           })
         }
         return ok(request, { providers: views })
@@ -3757,6 +3743,25 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       claimQuestion(pending, 'answered')
       pending.resolve(payload.answer)
       return Promise.resolve({ accepted: true })
+    },
+  }
+}
+
+/**
+ * Project one provider's authentication lifecycle onto its wire view, omitting
+ * absent fields; no view at all when the route registers no authentication.
+ * @param authentication - the adapter's current view, when one is registered.
+ * @returns the spreadable `authentication` fragment of a provider view.
+ */
+function authenticationView(
+  authentication: LlmProviderAuthenticationView | undefined,
+): Pick<ConfigurableProviderView, 'authentication'> {
+  return authentication === undefined ? {} : {
+    authentication: {
+      authenticated: authentication.authenticated,
+      methods: authentication.methods.map(method => ({ ...method })),
+      ...authentication.source === undefined ? {} : { source: authentication.source },
+      ...authentication.error === undefined ? {} : { error: authentication.error },
     },
   }
 }
